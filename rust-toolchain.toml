@@ -1,0 +1,6 @@
+# Pinned to the toolchain baked into the devcontainer image (see
+# .devcontainer/devcontainer.json -> RUST_VERSION) so no toolchain is
+# downloaded at runtime.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

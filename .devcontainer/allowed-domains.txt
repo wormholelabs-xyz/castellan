@@ -1,0 +1,41 @@
+# Egress allow-list for the castellan DNS firewall.
+#
+# Each line's type is determined by its prefix (checked exact -> suffix -> wildcard -> regex):
+#
+#   api.anthropic.com                              exact host (case-insensitive)
+#   .sentry.io                                     suffix: matches sentry.io AND any subdomain *.sentry.io
+#   *.gallery.vsassets.io                          wildcard: any subdomain (one or more labels) of the suffix
+#   re:^[a-z0-9-]+\.pkg\.dev$                      regex matched against the whole lowercased name
+#   JsonList(https://example.com/ips, [key1, key2])        fetch JSON; keys are top-level string arrays
+#   JsonList(https://example.com/ips, [arr[].field])        fetch JSON; keys traverse array-of-objects
+#
+# Blank lines and everything after `#` are ignored.
+
+# GitHub — git/gh/clone over HTTPS. The published IP ranges are seeded into the static
+# allow-sets via JsonList below; the names must also be listed so the resolver answers them.
+JsonList(https://api.github.com/meta, [web, api, git])
+.github.com
+.githubusercontent.com
+.githubassets.com
+.ghcr.io
+
+# Claude Required
+registry.npmjs.org
+api.anthropic.com
+.sentry.io
+statsig.anthropic.com
+statsig.com
+
+# Repo Specific
+
+# Rust toolchain & crates.io
+static.rust-lang.org
+index.crates.io
+static.crates.io
+crates.io
+
+# VS Code Marketplace — only needed to run fetch-vscode-extension-shas.sh from
+# inside the container (image-build extension downloads are not firewalled).
+# Safe to remove if you run that maintenance script on the host instead.
+marketplace.visualstudio.com
+*.gallery.vsassets.io
