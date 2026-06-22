@@ -74,11 +74,16 @@ pub async fn apply_ruleset(
     // external URLs freely.  During `enable-intercept` the default-drop rules are already
     // live and would block those same requests, so we read from the cache written above.
     let (static_v4, static_v6) = if intercept {
-        let cache = std::fs::read_to_string(IP_RANGES_CACHE)
-            .with_context(|| format!("reading IP ranges cache {IP_RANGES_CACHE} (was `setup` run first?)"))?;
+        let cache = std::fs::read_to_string(IP_RANGES_CACHE).with_context(|| {
+            format!("reading IP ranges cache {IP_RANGES_CACHE} (was `setup` run first?)")
+        })?;
         let cached: CachedRanges =
             serde_json::from_str(&cache).context("parsing IP ranges cache")?;
-        info!(v4 = cached.v4.len(), v6 = cached.v6.len(), "loaded IP ranges from cache");
+        info!(
+            v4 = cached.v4.len(),
+            v6 = cached.v6.len(),
+            "loaded IP ranges from cache"
+        );
         (cached.v4, cached.v6)
     } else {
         let mut all_v4: Vec<Ipv4Net> = Vec::new();
@@ -108,8 +113,11 @@ pub async fn apply_ruleset(
 
         // Persist so `enable-intercept` can reuse without fetching through the live firewall.
         std::fs::create_dir_all("/run/castellan").context("creating /run/castellan")?;
-        let json = serde_json::to_string(&CachedRanges { v4: v4.clone(), v6: v6.clone() })
-            .context("serializing IP ranges cache")?;
+        let json = serde_json::to_string(&CachedRanges {
+            v4: v4.clone(),
+            v6: v6.clone(),
+        })
+        .context("serializing IP ranges cache")?;
         std::fs::write(IP_RANGES_CACHE, json).context("writing IP ranges cache")?;
 
         (v4, v6)

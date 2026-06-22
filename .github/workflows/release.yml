@@ -4,10 +4,14 @@ on:
   push:
     tags: ["v*"]
 
+permissions: read-all
+
 jobs:
   build:
     name: Build (${{ matrix.artifact_name }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
@@ -16,12 +20,13 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             artifact_name: linux-aarch64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          toolchain: "1.96.0"
-          targets: ${{ matrix.target }}
+          persist-credentials: false
+
+      - run: |
+          rustup toolchain install 1.96.0 --target ${{ matrix.target }} --no-self-update
+          rustup default 1.96.0
 
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross --rev 29d00c7803f221f1b3f35e561b03792368fb8339
