@@ -112,8 +112,8 @@ pub async fn apply_ruleset(upstreams: Vec<IpAddr>, resolver_port: u16) -> Result
 /// The backup is only ever written from real (non-`127.0.0.1`) upstreams, so a missing
 /// backup can never be "recovered" into a self-referential one — that case fails loudly.
 pub fn resolve_upstreams() -> Result<Vec<IpAddr>> {
-    let current = std::fs::read_to_string(RESOLV_CONF)
-        .with_context(|| format!("reading {RESOLV_CONF}"))?;
+    let current =
+        std::fs::read_to_string(RESOLV_CONF).with_context(|| format!("reading {RESOLV_CONF}"))?;
 
     // If the live file still names real resolver(s), they are the source of truth: persist
     // them (sanitized to real upstreams only) so a later run — after we have repointed
@@ -145,7 +145,10 @@ pub fn resolve_upstreams() -> Result<Vec<IpAddr>> {
         !upstreams.is_empty(),
         "backup {RESOLV_BACKUP} names no usable upstream resolver"
     );
-    info!(?upstreams, "resolved upstream nameserver(s) from {RESOLV_BACKUP}");
+    info!(
+        ?upstreams,
+        "resolved upstream nameserver(s) from {RESOLV_BACKUP}"
+    );
     Ok(upstreams)
 }
 
