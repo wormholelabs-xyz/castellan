@@ -1,0 +1,75 @@
+{
+  "name": "Claude Code Sandbox",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Los_Angeles}",
+      "CLAUDE_CODE_VERSION": "2.1.173",
+      "CLAUDE_CODE_SHA512": "6e2bca7bf96168af74f08b35e801b9c575b1c0eb4386f278ebfbbb5368f8c7140e84cde30bfe138a40f88c915135969e63c8e36917a4961160fdaa1745de6f22",
+      "GIT_DELTA_VERSION": "0.18.2",
+      "GIT_DELTA_CHECKSUM_AMD64": "1658c7b61825d411b50734f34016101309e4b6e7f5799944cf8e4ac542cebd7f",
+      "GIT_DELTA_CHECKSUM_ARM64": "937781aa7788e1510858743fff6c9a8b4a69fe0a22a7c8a69493e633227939a9",
+      "RUST_VERSION": "1.96.0",
+      "RUSTUP_VERSION": "1.29.0",
+      "RUSTUP_CHECKSUM_AMD64": "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10",
+      "RUSTUP_CHECKSUM_ARM64": "9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792",
+      "OHMYZSH_COMMIT": "c954bbb168fc645592c50017de0d0e138db8df5f",
+      "POWERLEVEL10K_COMMIT": "35833ea15f14b71dbcebc7e54c104d8d56ca5268",
+      "CLAUDE_CODE_EXT_VERSION": "2.1.169",
+      "CLAUDE_CODE_EXT_SHA256": "amd64=da43c1faba58c887ad92e828c3a8bb0fc0e6d1dd70ad67a78e65624c0d265925,arm64=7c94d22de08d2ea9ea7e776668a5c8a1cb7ac4290256c088a0cbdd39dcc0b2a5",
+      "RUST_ANALYZER_EXT_VERSION": "0.3.2929",
+      "RUST_ANALYZER_EXT_SHA256": "amd64=1a1560f5c225bbf93c29c4f3282d0aa4296e2cd7ac5a4837ed915e8d2bcd69d0,arm64=c2b0cc09655d75f03de5161b10abce252cd98421693f0f669a737df80b1a3312",
+      "EVEN_BETTER_TOML_EXT_VERSION": "0.21.2",
+      "EVEN_BETTER_TOML_EXT_SHA256": "21b8d66af4285eee31e21a4492f921ab36dffcd859a67f1115d2930274650808",
+      "CODELLDB_EXT_VERSION": "1.12.2",
+      "CODELLDB_EXT_SHA256": "70e382942d2e13e626d749364f6a7f9a74dc82abcb5700c7faaa3f5bbba5ddcb",
+      "DEPENDI_EXT_VERSION": "0.7.22",
+      "DEPENDI_EXT_SHA256": "5d8d1f6d61c66771acef045976dab4d39976fd472fb3f1267a62e33204666bb2",
+      "GITLENS_EXT_VERSION": "18.0.0",
+      "GITLENS_EXT_SHA256": "8438cae737f2a4676130086c27f15bb43ac76c551f2fbd2f4bbc65a44023ca59"
+    }
+  },
+  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--sysctl=net.ipv4.conf.all.route_localnet=1"],
+  "customizations": {
+    "vscode": {
+      "extensions": [],
+      "settings": {
+        "extensions.autoUpdate": false,
+        "extensions.autoCheckUpdates": false,
+        "editor.formatOnSave": true,
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        },
+        "rust-analyzer.check.command": "clippy",
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          }
+        }
+      }
+    }
+  },
+  "remoteUser": "node",
+  "mounts": [
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=/dev/null,target=/workspace/.env.development,type=bind,consistency=delegated",
+    "source=/dev/null,target=/workspace/.env,type=bind,consistency=delegated"
+  ],
+  "containerEnv": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "cargo build --release && sudo /usr/local/bin/init-firewall.sh",
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh"
+}
