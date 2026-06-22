@@ -70,6 +70,6 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "cargo build --release && sudo /usr/local/bin/init-firewall.sh && { git update-index --skip-worktree .env.test || true; }",
+  "postCreateCommand": "cargo build --release && sudo /usr/local/bin/init-firewall.sh",
   "postStartCommand": "sudo /usr/local/bin/init-firewall.sh"
 }

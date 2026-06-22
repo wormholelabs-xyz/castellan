@@ -32,6 +32,7 @@ use crate::nft::Nft;
 /// Options for the long-lived daemon.
 pub struct DaemonOpts {
     pub listen: SocketAddr,
+    /// Upstream resolver(s). Empty ⇒ autodetect from `/etc/resolv.conf` (or its backup).
     pub upstreams: Vec<IpAddr>,
     pub patterns_path: PathBuf,
     pub ready_path: PathBuf,
@@ -205,17 +206,26 @@ fn build_resolver(upstreams: &[IpAddr]) -> Result<TokioResolver> {
     Ok(resolver)
 }
 
-/// Run the daemon until the server shuts down.
+/// Run the daemon until the server shuts down. The daemon owns the entire bootstrap so the
+/// ordering is race-free without an external sequencer (see the module docs in `setup.rs`):
+///
+///   1. resolve the real upstream(s),
+///   2. bind the listener socket(s) — *before* any interception exists,
+///   3. on a cold start, fetch seeds and atomically apply default-drop + DNS interception,
+///   4. point resolv.conf at ourselves,
+///   5. signal readiness and serve.
+///
+/// A warm restart (the `nat_output` chain is already in the kernel) skips step 3 so the
+/// dynamic allow-sets populated by the previous run are preserved.
 pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
-    // Precondition: the ruleset must already be installed, or every resolved IP we try to
-    // inject will fail and the daemon is useless. Fail loudly instead.
     let nft = Nft::default();
-    if !nft.table_exists().await? {
-        anyhow::bail!(
-            "nftables table `{}` not found — run `castellan setup` before the daemon",
-            crate::nft::TABLE
-        );
-    }
+
+    // 1. Upstream(s): explicit flag wins, otherwise read resolv.conf (or its backup).
+    let upstreams = if opts.upstreams.is_empty() {
+        crate::setup::resolve_upstreams()?
+    } else {
+        opts.upstreams
+    };
 
     let patterns = PatternSet::load(&opts.patterns_path)?;
     info!(
@@ -230,19 +240,20 @@ pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
         debug!("regex pattern: {src}");
     }
 
-    let resolver = build_resolver(&opts.upstreams).context("building upstream resolver")?;
-    info!(upstreams = ?opts.upstreams, "forwarding to upstream resolver(s)");
+    let resolver = build_resolver(&upstreams).context("building upstream resolver")?;
+    info!(?upstreams, "forwarding to upstream resolver(s)");
 
     let handler = Handler {
         patterns: Arc::new(patterns),
         resolver,
-        nft,
+        nft: nft.clone(),
         ttl_floor_secs: opts.ttl_floor_secs,
         ttl_ceiling_secs: opts.ttl_ceiling_secs,
     };
 
     let mut server = Server::new(handler);
 
+    // 2. Bind before interception is enabled so the :53 redirect never hits a dead port.
     let udp = UdpSocket::bind(opts.listen)
         .await
         .with_context(|| format!("binding UDP {}", opts.listen))?;
@@ -252,7 +263,21 @@ pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
     server.register_socket(udp);
     server.register_listener(tcp, Duration::from_secs(10), 65_535);
 
-    // Signal readiness so the bootstrap can wait for "listening" before redirecting DNS.
+    // 3. Cold start only: build the ruleset. On a warm restart the ruleset (and its
+    //    populated dynamic allow-sets) is already live, so we leave it untouched.
+    if nft.intercept_active().await? {
+        info!("interception already active — warm restart, keeping the live ruleset");
+    } else {
+        info!("cold start — applying default-drop + DNS-intercept ruleset");
+        crate::setup::apply_ruleset(upstreams, opts.listen.port())
+            .await
+            .context("applying firewall ruleset")?;
+    }
+
+    // 4. Take over DNS resolution (belt-and-suspenders alongside the NAT redirect).
+    crate::setup::repoint_resolv_conf()?;
+
+    // 5. Signal readiness, then serve.
     if let Some(parent) = opts.ready_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

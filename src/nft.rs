@@ -33,9 +33,6 @@ pub struct RulesetParams {
     pub static_v6: Vec<Ipv6Net>,
     /// Port the local resolver listens on (used by the DNS-redirect rule).
     pub resolver_port: u16,
-    /// When true, install the NAT chain that transparently redirects egress :53 to the
-    /// local resolver. Enabled only after the daemon is confirmed listening.
-    pub intercept: bool,
 }
 
 /// Handle to the `nft` binary. Cheap to clone (holds only the binary path).
@@ -79,13 +76,15 @@ impl Nft {
         Ok(())
     }
 
-    /// True if our table currently exists.
-    pub async fn table_exists(&self) -> Result<bool> {
+    /// True if DNS interception is already live, i.e. our `nat_output` redirect chain
+    /// exists. The daemon uses this to tell a cold start (build the whole ruleset) from a
+    /// warm restart (leave the populated dynamic allow-sets untouched).
+    pub async fn intercept_active(&self) -> Result<bool> {
         let out = Command::new(&self.bin)
-            .args(["list", "table", "inet", TABLE])
+            .args(["list", "chain", "inet", TABLE, "nat_output"])
             .output()
             .await
-            .context("running `nft list table`")?;
+            .context("running `nft list chain`")?;
         Ok(out.status.success())
     }
 
@@ -261,18 +260,18 @@ fn build_ruleset(p: &RulesetParams) -> String {
     // NAT chain: transparently redirect all egress DNS to the local resolver so even
     // processes with a hardcoded resolver get their queries seen (and thus their IPs
     // authorized). The daemon itself (uid 0) is exempted so its upstream queries escape.
-    if p.intercept {
-        s.push_str("  chain nat_output {\n");
-        s.push_str("    type nat hook output priority -100; policy accept;\n");
-        s.push_str("    meta skuid 0 return\n"); // daemon runs as root → forwards directly
-        s.push_str("    ip daddr 127.0.0.0/8 return\n");
-        s.push_str("    ip6 daddr ::1 return\n");
-        s.push_str(&format!(
-            "    meta l4proto {{ tcp, udp }} th dport 53 redirect to :{}\n",
-            p.resolver_port
-        ));
-        s.push_str("  }\n");
-    }
+    // Installed in the same atomic transaction as the default-drop output chain: the daemon
+    // binds its socket before applying this ruleset, so the redirect never hits a dead port.
+    s.push_str("  chain nat_output {\n");
+    s.push_str("    type nat hook output priority -100; policy accept;\n");
+    s.push_str("    meta skuid 0 return\n"); // daemon runs as root → forwards directly
+    s.push_str("    ip daddr 127.0.0.0/8 return\n");
+    s.push_str("    ip6 daddr ::1 return\n");
+    s.push_str(&format!(
+        "    meta l4proto {{ tcp, udp }} th dport 53 redirect to :{}\n",
+        p.resolver_port
+    ));
+    s.push_str("  }\n");
 
     s.push_str("}\n");
     s

@@ -5,18 +5,18 @@
 # safety net: if the daemon dies, no new DNS resolution happens (existing connections
 # survive via conntrack), and this restarts it within ~1s. Logs go to /var/log/castellan.log.
 #
-# Launched detached (setsid) by init-firewall.sh. Expects UPSTREAM (and optionally PORT).
+# Launched detached (setsid) by init-firewall.sh. Optionally honors PORT (default 53). The
+# daemon self-detects its upstream resolver(s), so no UPSTREAM is needed here.
 set -u
 
 BINARY=/usr/local/bin/castellan
 LOG=/var/log/castellan.log
-: "${UPSTREAM:?UPSTREAM env var is required}"
 PORT="${PORT:-53}"
 
-echo "[$(date)] supervisor starting (upstream=${UPSTREAM} port=${PORT})" >>"$LOG"
+echo "[$(date)] supervisor starting (port=${PORT})" >>"$LOG"
 while true; do
   echo "[$(date)] launching castellan daemon" >>"$LOG"
-  "$BINARY" daemon --upstream "$UPSTREAM" --listen "127.0.0.1:${PORT}" >>"$LOG" 2>&1
+  "$BINARY" daemon --listen "127.0.0.1:${PORT}" >>"$LOG" 2>&1
   echo "[$(date)] daemon exited (rc=$?); restarting in 1s" >>"$LOG"
   sleep 1
 done

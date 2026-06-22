@@ -25,6 +25,7 @@ api.anthropic.com
 .sentry.io
 statsig.anthropic.com
 statsig.com
+platform.claude.com
 
 # Repo Specific
 

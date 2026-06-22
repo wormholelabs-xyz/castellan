@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-mod config;
-mod dns;
-mod meta;
-mod nft;
-mod setup;
-mod verify;
+pub mod config;
+pub mod dns;
+pub mod meta;
+pub mod nft;
+pub mod setup;
+pub mod verify;
 
 #[derive(Parser)]
 #[command(name = "castellan", version, about)]
@@ -27,25 +27,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Build and apply the default-drop nftables ruleset (DNS interception NOT yet active).
-    Setup(SetupArgs),
-    /// Add the NAT redirect that routes egress DNS through the local resolver. Run only
-    /// after the daemon is listening.
-    EnableIntercept(SetupArgs),
-    /// Run the long-lived DNS proxy daemon.
+    /// Run the long-lived DNS proxy daemon. Self-bootstrapping: it binds, installs the
+    /// default-drop + DNS-intercept ruleset, repoints resolv.conf, then serves.
     Daemon(DaemonArgs),
     /// End-to-end verification of the firewall.
     Verify(VerifyArgs),
-}
-
-#[derive(Args)]
-struct SetupArgs {
-    /// Upstream DNS server IP(s) the daemon forwards to. Comma-separated; `:port` ignored.
-    #[arg(long, value_delimiter = ',', required = true)]
-    upstream: Vec<String>,
-    /// Port the local resolver listens on.
-    #[arg(long, default_value_t = 53)]
-    port: u16,
 }
 
 #[derive(Args)]
@@ -53,8 +39,9 @@ struct DaemonArgs {
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:53")]
     listen: SocketAddr,
-    /// Upstream DNS server IP(s). Comma-separated; `:port` ignored.
-    #[arg(long, value_delimiter = ',', required = true)]
+    /// Upstream DNS server IP(s). Comma-separated; `:port` ignored. Omit to autodetect
+    /// from `/etc/resolv.conf` (or the backup, on a restart).
+    #[arg(long, value_delimiter = ',')]
     upstream: Vec<String>,
     /// Pattern file path. Defaults to the workspace copy, falling back to the baked copy.
     #[arg(long)]
@@ -110,14 +97,6 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Setup(a) => {
-            let upstreams = parse_upstreams(&a.upstream)?;
-            setup::apply_ruleset(upstreams, a.port, false).await
-        }
-        Command::EnableIntercept(a) => {
-            let upstreams = parse_upstreams(&a.upstream)?;
-            setup::apply_ruleset(upstreams, a.port, true).await
-        }
         Command::Daemon(a) => {
             let upstreams = parse_upstreams(&a.upstream)?;
             let patterns_path = a.patterns.unwrap_or_else(setup::patterns_path);
