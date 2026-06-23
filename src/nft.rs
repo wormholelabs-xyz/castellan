@@ -9,7 +9,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::process::Stdio;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ipnet::{Ipv4Net, Ipv6Net};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;

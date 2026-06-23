@@ -13,7 +13,6 @@ set -euo pipefail
 IFS=$'\n\t'
 
 BINARY=/usr/local/bin/castellan
-BUILT=/workspace/target/release/castellan
 SUPERVISOR=/usr/local/bin/castellan-supervisor.sh
 READY=/run/castellan/ready
 LOG=/var/log/castellan.log
@@ -24,14 +23,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# Install the freshly-built binary (built as the non-root user at postCreate). The binary
-# lives in /usr/local/bin (root-owned) so the sudoers grant can't be abused via a swapped
-# workspace file.
-if [ -x "$BUILT" ]; then
-  install -m 0755 "$BUILT" "$BINARY"
-fi
 if [ ! -x "$BINARY" ]; then
-  echo "ERROR: $BINARY not found — run 'cargo build --release' first" >&2
+  echo "ERROR: $BINARY not found" >&2
   exit 1
 fi
 

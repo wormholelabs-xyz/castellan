@@ -60,7 +60,7 @@ impl RequestHandler for Handler {
             Err(_) => {
                 return self
                     .reply_error(request, response_handle, ResponseCode::FormErr)
-                    .await
+                    .await;
             }
         };
         let name = info.query.name().to_string();

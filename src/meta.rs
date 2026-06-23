@@ -13,7 +13,7 @@
 //! - Google: `gstatic.com/ipranges/goog.json` — keys `prefixes[].ipv4Prefix`, `prefixes[].ipv6Prefix`
 //! - AWS: `ip-ranges.amazonaws.com/ip-ranges.json` — keys `prefixes[].ip_prefix`, `ipv6_prefixes[].ipv6_prefix`
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ipnet::{Ipv4Net, Ipv6Net};
 use std::str::FromStr;
 

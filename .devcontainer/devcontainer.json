@@ -2,6 +2,7 @@
   "name": "Claude Code Sandbox",
   "build": {
     "dockerfile": "Dockerfile",
+    "context": "..",
     "args": {
       "TZ": "${localEnv:TZ:America/Los_Angeles}",
       "CLAUDE_CODE_VERSION": "2.1.173",
@@ -70,6 +71,6 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "cargo build --release && sudo /usr/local/bin/init-firewall.sh",
+  "postCreateCommand": "sudo /usr/local/bin/init-firewall.sh",
   "postStartCommand": "sudo /usr/local/bin/init-firewall.sh"
 }

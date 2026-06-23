@@ -1,7 +1,13 @@
 [package]
 name = "castellan"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
+description = "DNS-driven egress firewall for development containers"
+license = "Apache-2.0"
+repository = "https://github.com/wormholelabs-xyz/castellan"
+readme = "README.md"
+keywords = ["dns", "firewall", "egress", "nftables", "devcontainer"]
+categories = ["command-line-utilities", "network-programming"]
 
 [[bin]]
 name = "castellan"
@@ -17,7 +23,7 @@ hickory-resolver = "0.26.1"
 hickory-server = "0.26.1"
 ipnet = { version = "2.12.0", features = ["serde"] }
 regex = "1.12.4"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time", "process", "io-util"] }

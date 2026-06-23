@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
 
@@ -195,6 +195,11 @@ impl PatternSet {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn exact_count(&self) -> usize { self.exact.len() }
+    pub fn suffix_count(&self) -> usize { self.suffixes.len() }
+    pub fn wildcard_count(&self) -> usize { self.globs.len() }
+    pub fn regex_count(&self) -> usize { self.regexes.len() }
 
     /// Regex sources, for debug logging.
     pub fn regex_sources(&self) -> &[String] {
