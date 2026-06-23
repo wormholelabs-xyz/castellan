@@ -7,7 +7,6 @@
 //! before the allow-set population path (interception) is live.
 
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -27,26 +26,18 @@ pub const READY_PATH: &str = "/run/castellan/ready";
 const RESOLV_CONF: &str = "/etc/resolv.conf";
 const RESOLV_BACKUP: &str = "/etc/resolv.conf.castellan";
 
-/// Workspace pattern file (authoritative — template users edit this).
-pub const PATTERNS_WORKSPACE: &str = "/workspace/.devcontainer/allowed-domains.txt";
-/// Baked fallback pattern file.
+/// Baked pattern file (copied into the image at build time).
 pub const PATTERNS_FALLBACK: &str = "/usr/local/share/castellan/allowed-domains.txt";
-
-/// Resolve which pattern file to use (workspace wins, baked copy is the fallback).
-pub fn patterns_path() -> PathBuf {
-    let ws = PathBuf::from(PATTERNS_WORKSPACE);
-    if ws.exists() {
-        ws
-    } else {
-        PathBuf::from(PATTERNS_FALLBACK)
-    }
-}
 
 /// Fetch the static seed ranges and atomically apply the full default-drop + DNS-intercept
 /// ruleset. Called once per cold start, after the daemon's listener socket is already bound
 /// (so the redirect never points at a dead port) but while egress is still open (so the
 /// seed fetch below can reach the JSON endpoints).
-pub async fn apply_ruleset(upstreams: Vec<IpAddr>, resolver_port: u16) -> Result<()> {
+pub async fn apply_ruleset(
+    upstreams: Vec<IpAddr>,
+    resolver_port: u16,
+    patterns_path: &std::path::Path,
+) -> Result<()> {
     let nft = Nft::default();
     nft.check_available()
         .await
@@ -55,7 +46,7 @@ pub async fn apply_ruleset(upstreams: Vec<IpAddr>, resolver_port: u16) -> Result
     let host_networks = detect_host_networks().await?;
     info!(?host_networks, "detected host networks");
 
-    let config = Config::load(&patterns_path()).context("loading allow-list config")?;
+    let config = Config::load(patterns_path).context("loading allow-list config")?;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -193,13 +184,12 @@ async fn detect_host_networks() -> Result<Vec<String>> {
     let mut nets = Vec::new();
     for line in routes.lines() {
         // e.g. "default via 172.17.0.1 dev eth0"
-        if let Some(rest) = line.strip_prefix("default via ") {
-            if let Some(gw) = rest.split_whitespace().next() {
-                if let Ok(IpAddr::V4(v4)) = gw.parse::<IpAddr>() {
-                    let o = v4.octets();
-                    nets.push(format!("{}.{}.{}.0/24", o[0], o[1], o[2]));
-                }
-            }
+        if let Some(rest) = line.strip_prefix("default via ")
+            && let Some(gw) = rest.split_whitespace().next()
+            && let Ok(IpAddr::V4(v4)) = gw.parse::<IpAddr>()
+        {
+            let o = v4.octets();
+            nets.push(format!("{}.{}.{}.0/24", o[0], o[1], o[2]));
         }
     }
     Ok(nets)

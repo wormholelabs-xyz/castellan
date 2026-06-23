@@ -32,6 +32,8 @@ enum Command {
     Daemon(DaemonArgs),
     /// End-to-end verification of the firewall.
     Verify(VerifyArgs),
+    /// Parse and validate an allow-list file, then optionally test names against it.
+    Check(CheckArgs),
 }
 
 #[derive(Args)]
@@ -43,9 +45,9 @@ struct DaemonArgs {
     /// from `/etc/resolv.conf` (or the backup, on a restart).
     #[arg(long, value_delimiter = ',')]
     upstream: Vec<String>,
-    /// Pattern file path. Defaults to the workspace copy, falling back to the baked copy.
-    #[arg(long)]
-    patterns: Option<PathBuf>,
+    /// Pattern file path.
+    #[arg(long, default_value = setup::PATTERNS_FALLBACK)]
+    patterns: PathBuf,
     /// Readiness file to write once listening.
     #[arg(long, default_value = setup::READY_PATH)]
     ready: PathBuf,
@@ -65,6 +67,16 @@ struct VerifyArgs {
     /// Hosts that must be reachable.
     #[arg(long, value_delimiter = ',', default_value = "api.github.com")]
     allowed: Vec<String>,
+}
+
+#[derive(Args)]
+struct CheckArgs {
+    /// Pattern file to validate.
+    #[arg(long, default_value = setup::PATTERNS_FALLBACK)]
+    patterns: std::path::PathBuf,
+    /// DNS names to test against the loaded patterns.
+    #[arg(value_name = "NAME")]
+    names: Vec<String>,
 }
 
 /// Parse `--upstream` values (each `ip` or `ip:port`) into IP addresses.
@@ -99,11 +111,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Daemon(a) => {
             let upstreams = parse_upstreams(&a.upstream)?;
-            let patterns_path = a.patterns.unwrap_or_else(setup::patterns_path);
             dns::run_daemon(dns::DaemonOpts {
                 listen: a.listen,
                 upstreams,
-                patterns_path,
+                patterns_path: a.patterns,
                 ready_path: a.ready,
                 ttl_floor_secs: a.ttl_floor,
                 ttl_ceiling_secs: a.ttl_ceiling,
@@ -111,5 +122,35 @@ async fn main() -> Result<()> {
             .await
         }
         Command::Verify(a) => verify::run(&a.blocked, &a.allowed).await,
+        Command::Check(a) => check(&a),
     }
+}
+
+fn check(args: &CheckArgs) -> Result<()> {
+    let cfg = config::Config::load(&args.patterns)
+        .with_context(|| format!("failed to parse {}", args.patterns.display()))?;
+    let p = &cfg.patterns;
+    println!("{}: {} pattern(s)", args.patterns.display(), p.len());
+    println!("  exact:    {}", p.exact_count());
+    println!("  suffix:   {}", p.suffix_count());
+    println!("  wildcard: {}", p.wildcard_count());
+    println!("  regex:    {}", p.regex_count());
+    if !cfg.ip_lists.is_empty() {
+        println!("  JsonList: {} URL(s)", cfg.ip_lists.len());
+    }
+    if !args.names.is_empty() {
+        println!();
+        let width = args
+            .names
+            .iter()
+            .map(|n| n.len())
+            .max()
+            .unwrap_or(20)
+            .max(20);
+        for name in &args.names {
+            let verdict = if p.is_allowed(name) { "ALLOW" } else { "BLOCK" };
+            println!("{name:<width$}  {verdict}");
+        }
+    }
+    Ok(())
 }

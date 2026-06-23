@@ -64,7 +64,7 @@ RUN npm pack @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --pack-destination
 
 # Base stage for VS Code extension downloads — provides the download-vsix.sh helper.
 FROM downloader AS vscode-downloader
-COPY download-vsix.sh /usr/local/bin/download-vsix.sh
+COPY .devcontainer/download-vsix.sh /usr/local/bin/download-vsix.sh
 RUN chmod +x /usr/local/bin/download-vsix.sh
 
 # VS Code extension stages — one per extension so each version bump only busts its own cache layer.
@@ -104,6 +104,44 @@ FROM vscode-downloader AS vscode-ext-gitlens
 ARG GITLENS_EXT_VERSION
 ARG GITLENS_EXT_SHA256
 RUN download-vsix.sh eamodio gitlens "${GITLENS_EXT_VERSION}" "${GITLENS_EXT_SHA256}"
+
+# Stage: build castellan from source (context root = workspace root).
+# Uses a minimal toolchain — no clippy/rustfmt needed for the release binary.
+FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d AS castellan-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  gcc \
+  libc6-dev \
+  ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=rustup /opt/rustup/rustup-init /usr/local/bin/rustup-init
+ARG RUST_VERSION
+ENV RUSTUP_HOME=/usr/local/rustup \
+  CARGO_HOME=/usr/local/cargo \
+  PATH=/usr/local/cargo/bin:$PATH
+RUN rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}" \
+  && rm /usr/local/bin/rustup-init
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src/
+RUN cargo build --release
+
+# # Stage: download castellan binary from GitHub releases.
+# # Uncomment and swap the COPY below once the repo is public and releases are published.
+# FROM downloader AS castellan-download
+# ARG CASTELLAN_VERSION=0.1.0
+# ARG CASTELLAN_CHECKSUM_AMD64=<sha256 of castellan-linux-x86_64.tar.gz>
+# ARG CASTELLAN_CHECKSUM_ARM64=<sha256 of castellan-linux-aarch64.tar.gz>
+# RUN ARCH=$(dpkg --print-architecture) && \
+#   if [ "${ARCH}" = "amd64" ]; then \
+#     TARBALL="castellan-linux-x86_64.tar.gz"; CHECKSUM="${CASTELLAN_CHECKSUM_AMD64}"; \
+#   else \
+#     TARBALL="castellan-linux-aarch64.tar.gz"; CHECKSUM="${CASTELLAN_CHECKSUM_ARM64}"; \
+#   fi && \
+#   curl -fsSLo /tmp/castellan.tar.gz \
+#     "https://github.com/wormholelabs-xyz/castellan/releases/download/v${CASTELLAN_VERSION}/${TARBALL}" && \
+#   echo "${CHECKSUM}  /tmp/castellan.tar.gz" | sha256sum -c - && \
+#   tar -xzf /tmp/castellan.tar.gz -C /tmp castellan && \
+#   install -m 0755 /tmp/castellan /opt/castellan/castellan
 
 # Main stage
 FROM node:24@sha256:bb20cf73b3ad7212834ec48e2174cdcb5775f6550510a5336b842ae32741ce6c
@@ -190,19 +228,21 @@ ENV VISUAL=nano
 # Install oh-my-zsh and powerlevel10k theme from pinned stages
 COPY --chown=node:node --from=oh-my-zsh /opt/ohmyzsh /home/node/.oh-my-zsh
 COPY --chown=node:node --from=powerlevel10k /opt/powerlevel10k /home/node/.oh-my-zsh/custom/themes/powerlevel10k
-COPY --chown=node:node node-zshrc /home/node/.zshrc
+COPY --chown=node:node .devcontainer/node-zshrc /home/node/.zshrc
 
 # Install Claude Code from SHA-verified npm tarball
 COPY --chown=node:node --from=claude-code-npm /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz /tmp/
 RUN npm install -g /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz \
     && rm /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz
 
-# Copy and set up the castellan firewall scripts. The `castellan` binary itself is built
-# from the workspace crate at postCreate and installed to /usr/local/bin by init-firewall.sh.
+# Install the castellan firewall binary (built from source in the castellan-builder stage).
+# To switch to a downloaded release binary once the repo is public, replace the COPY below
+# with: COPY --from=castellan-download /opt/castellan/castellan /usr/local/bin/castellan
 USER root
-COPY init-firewall.sh castellan-supervisor.sh /usr/local/bin/
+COPY --from=castellan-builder /build/target/release/castellan /usr/local/bin/castellan
+COPY .devcontainer/init-firewall.sh .devcontainer/castellan-supervisor.sh /usr/local/bin/
 RUN mkdir -p /usr/local/share/castellan
-COPY allowed-domains.txt /usr/local/share/castellan/allowed-domains.txt
+COPY .devcontainer/allowed-domains.txt /usr/local/share/castellan/allowed-domains.txt
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/castellan-supervisor.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall

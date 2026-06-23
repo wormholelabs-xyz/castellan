@@ -60,7 +60,7 @@ impl RequestHandler for Handler {
             Err(_) => {
                 return self
                     .reply_error(request, response_handle, ResponseCode::FormErr)
-                    .await
+                    .await;
             }
         };
         let name = info.query.name().to_string();
@@ -269,7 +269,7 @@ pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
         info!("interception already active — warm restart, keeping the live ruleset");
     } else {
         info!("cold start — applying default-drop + DNS-intercept ruleset");
-        crate::setup::apply_ruleset(upstreams, opts.listen.port())
+        crate::setup::apply_ruleset(upstreams, opts.listen.port(), &opts.patterns_path)
             .await
             .context("applying firewall ruleset")?;
     }

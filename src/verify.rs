@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::Stdio;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tokio::process::Command;
 use tracing::{error, info};
 
