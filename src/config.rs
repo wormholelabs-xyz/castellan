@@ -196,10 +196,18 @@ impl PatternSet {
         self.len() == 0
     }
 
-    pub fn exact_count(&self) -> usize { self.exact.len() }
-    pub fn suffix_count(&self) -> usize { self.suffixes.len() }
-    pub fn wildcard_count(&self) -> usize { self.globs.len() }
-    pub fn regex_count(&self) -> usize { self.regexes.len() }
+    pub fn exact_count(&self) -> usize {
+        self.exact.len()
+    }
+    pub fn suffix_count(&self) -> usize {
+        self.suffixes.len()
+    }
+    pub fn wildcard_count(&self) -> usize {
+        self.globs.len()
+    }
+    pub fn regex_count(&self) -> usize {
+        self.regexes.len()
+    }
 
     /// Regex sources, for debug logging.
     pub fn regex_sources(&self) -> &[String] {

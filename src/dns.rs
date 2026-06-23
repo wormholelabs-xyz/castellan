@@ -269,7 +269,7 @@ pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
         info!("interception already active — warm restart, keeping the live ruleset");
     } else {
         info!("cold start — applying default-drop + DNS-intercept ruleset");
-        crate::setup::apply_ruleset(upstreams, opts.listen.port())
+        crate::setup::apply_ruleset(upstreams, opts.listen.port(), &opts.patterns_path)
             .await
             .context("applying firewall ruleset")?;
     }

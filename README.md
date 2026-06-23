@@ -66,12 +66,15 @@ In the devcontainer it is fully automatic: the `castellan` binary is built from 
 re-established on every restart (`postCreateCommand` / `postStartCommand` both run
 `sudo /usr/local/bin/init-firewall.sh`).
 
-To apply code changes, verify the build compiles first, then rebuild the devcontainer:
+To apply code or allow-list changes, verify the build compiles first, then rebuild the devcontainer:
 
 ```sh
-cargo build --release   # verify it compiles
+cargo build --release                                               # verify it compiles
+castellan check --patterns .devcontainer/allowed-domains.txt       # validate allow-list
 # then: rebuild devcontainer
 ```
+
+The allow-list is baked into the image at build time; edits to `.devcontainer/allowed-domains.txt` require a devcontainer rebuild to take effect.
 
 To validate allow-list changes without running the daemon:
 
@@ -94,8 +97,8 @@ The CLI subcommands (`daemon`, `verify`, `check`) can also be run directly; see 
 - Daemon logs: `/var/log/castellan.log`.
 - Inspect live state: `sudo nft list table inet castellan`.
 - Recover after a daemon crash: `sudo /usr/local/bin/init-firewall.sh` (the supervisor also restarts it automatically).
-- Recover after a bad allow-list edit: fix the file, validate with `castellan check`, then `sudo /usr/local/bin/init-firewall.sh`.
-- Apply a code change: rebuild the devcontainer.
+- Recover after a bad allow-list edit: fix `.devcontainer/allowed-domains.txt`, validate with `castellan check`, then rebuild the devcontainer (the allow-list is baked into the image).
+- Apply a code or allow-list change: rebuild the devcontainer.
 
 ## Using Castellan in your own devcontainer
 

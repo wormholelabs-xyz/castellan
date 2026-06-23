@@ -140,7 +140,13 @@ fn check(args: &CheckArgs) -> Result<()> {
     }
     if !args.names.is_empty() {
         println!();
-        let width = args.names.iter().map(|n| n.len()).max().unwrap_or(20).max(20);
+        let width = args
+            .names
+            .iter()
+            .map(|n| n.len())
+            .max()
+            .unwrap_or(20)
+            .max(20);
         for name in &args.names {
             let verdict = if p.is_allowed(name) { "ALLOW" } else { "BLOCK" };
             println!("{name:<width$}  {verdict}");
