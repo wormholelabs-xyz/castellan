@@ -190,9 +190,9 @@ RUN rustup-init -y --no-modify-path --profile default --default-toolchain "${RUS
   && chmod -R a+w "${RUSTUP_HOME}" "${CARGO_HOME}" \
   && rm /usr/local/bin/rustup-init
 
-# Ensure default node user has access to /usr/local/share
+# Ensure default node user has access to /usr/local/share/npm-global
 RUN mkdir -p /usr/local/share/npm-global && \
-  chown -R node:node /usr/local/share
+  chown -R node:node /usr/local/share/npm-global
 
 ARG USERNAME=node
 

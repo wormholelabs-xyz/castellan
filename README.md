@@ -154,6 +154,9 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/castellan-supervisor
 RUN echo "YOUR_USER ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \
       > /etc/sudoers.d/castellan-firewall && \
     chmod 0440 /etc/sudoers.d/castellan-firewall
+# The COPY + chmod above already sets root ownership on init-firewall.sh and
+# castellan-supervisor.sh. Do not change their owner or mode — the sudoers grant
+# gives effective root to anyone who can write those paths.
 ```
 
 ### 3. Configure devcontainer.json
@@ -195,6 +198,16 @@ JsonList(https://api.github.com/meta, [web, api, git])
 ```
 
 See [The allow-list](#the-allow-list) section above for the full syntax reference.
+
+## Security notes
+
+See [SECURITY.md](SECURITY.md) for the full threat model. In brief:
+
+- Castellan assumes the in-container attacker is **non-root and lacks `CAP_NET_ADMIN`**. A process with either can flush the nftables ruleset and bypass the firewall.
+- It intercepts DNS at the system resolver; DNS-over-HTTPS/TLS, hardcoded IPs, and connections to already-authorized IPs bypass it.
+- It controls *where* traffic goes, not *what* it contains — exfiltration to allowed destinations is out of scope.
+
+The sudoers grant (`NOPASSWD: /usr/local/bin/init-firewall.sh`) gives effective root to anyone who can write that path; `init-firewall.sh` and `castellan-supervisor.sh` must be root-owned and non-writable. The full directory chain from `/usr/local/share/` down to `allowed-domains.txt` must be root-owned and non-writable too — in Unix, write access to any ancestor directory is enough to rename the `castellan/` directory aside and substitute a different allow-list.
 
 ## Development
 
