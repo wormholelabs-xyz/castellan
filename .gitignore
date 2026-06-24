@@ -4,6 +4,7 @@
 !.env.test
 
 .DS_Store
+.vscode/settings.json
 
 # Rust
 /target
