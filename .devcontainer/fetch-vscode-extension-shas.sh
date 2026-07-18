@@ -18,7 +18,8 @@ DEVCONTAINER_JSON="${SCRIPT_DIR}/devcontainer.json"
 MIN_AGE_HOURS="${MIN_AGE_HOURS:-336}"
 
 TMPDIR_WORK=$(mktemp -d)
-trap 'rm -rf "${TMPDIR_WORK}"' EXIT
+_tmp=""
+trap 'rm -rf "${TMPDIR_WORK}"; [ -n "${_tmp}" ] && rm -f "${_tmp}"' EXIT
 
 sha256() {
   if command -v sha256sum > /dev/null 2>&1; then
@@ -184,7 +185,6 @@ for result_file in "${TMPDIR_WORK}"/*.result; do
   version="$(sed -n '1p' "${result_file}")"
   sha="$(sed -n '2p' "${result_file}")"
   _tmp=$(mktemp "${DEVCONTAINER_JSON}.XXXXXX")
-  trap 'rm -f "${_tmp}"' EXIT
   jq --arg ver_key "${arg_prefix}_VERSION" \
      --arg sha_key "${arg_prefix}_SHA256" \
      --arg ver "${version}" \

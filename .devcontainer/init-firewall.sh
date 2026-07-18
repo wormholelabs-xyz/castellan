@@ -28,10 +28,33 @@ if [ ! -x "$BINARY" ]; then
   exit 1
 fi
 
-# (Re)start the supervised daemon. It self-bootstraps the firewall on startup.
+# Stop any previous instance, then (re)start the supervised daemon. It self-bootstraps the
+# firewall on startup. pkill only *sends* signals and returns immediately, so we must wait
+# for the old processes to actually exit before launching a new one — otherwise the new
+# daemon races the old one to bind port 53 and loses (missing the readiness window below).
 rm -f "$READY"
+
+# Wait (up to ~5s) for processes matching a pattern to exit, escalating to SIGKILL.
+wait_gone() {
+  local pattern="$1" i
+  for i in $(seq 1 25); do
+    pgrep -f "$pattern" >/dev/null 2>&1 || return 0
+    sleep 0.2
+  done
+  pkill -KILL -f "$pattern" 2>/dev/null || true
+  for i in $(seq 1 25); do
+    pgrep -f "$pattern" >/dev/null 2>&1 || return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# Kill the supervisor first so it stops respawning the daemon, then the daemon itself.
 pkill -f "$SUPERVISOR" 2>/dev/null || true
+wait_gone "$SUPERVISOR" || { echo "ERROR: previous supervisor would not exit" >&2; exit 1; }
 pkill -f "$BINARY daemon" 2>/dev/null || true
+wait_gone "$BINARY daemon" || { echo "ERROR: previous daemon would not exit" >&2; exit 1; }
+
 mkdir -p "$(dirname "$READY")"
 PORT="$PORT" setsid "$SUPERVISOR" >/dev/null 2>&1 </dev/null &
 

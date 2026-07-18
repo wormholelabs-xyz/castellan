@@ -55,12 +55,28 @@ RUN git init /opt/powerlevel10k \
     && git -C /opt/powerlevel10k checkout FETCH_HEAD \
     && rm -rf /opt/powerlevel10k/.git
 
-# Stage: Download and verify claude-code npm package
-FROM node:24@sha256:bb20cf73b3ad7212834ec48e2174cdcb5775f6550510a5336b842ae32741ce6c AS claude-code-npm
+# Stage: Download and verify the Claude Code native binary
+# This mirrors what https://downloads.claude.ai/claude-code-releases/bootstrap.sh does,
+# but pins the version and per-arch checksum instead of following "latest". The base
+# image is glibc (Debian), so we use the linux-x64 / linux-arm64 (non-musl) builds.
+# Refresh the checksums from the release manifest when bumping the version:
+#   curl -fsSL https://downloads.claude.ai/claude-code-releases/${CLAUDE_CODE_VERSION}/manifest.json
+FROM downloader AS claude-code
 ARG CLAUDE_CODE_VERSION
-ARG CLAUDE_CODE_SHA512
-RUN npm pack @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} --pack-destination /tmp \
-    && echo "${CLAUDE_CODE_SHA512}  /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz" | sha512sum -c
+ARG CLAUDE_CODE_CHECKSUM_AMD64
+ARG CLAUDE_CODE_CHECKSUM_ARM64
+RUN ARCH=$(dpkg --print-architecture) && \
+  if [ "${ARCH}" = "amd64" ]; then \
+    PLATFORM="linux-x64"; EXPECTED_CHECKSUM="${CLAUDE_CODE_CHECKSUM_AMD64}"; \
+  else \
+    PLATFORM="linux-arm64"; EXPECTED_CHECKSUM="${CLAUDE_CODE_CHECKSUM_ARM64}"; \
+  fi && \
+  curl -fsSLo /tmp/claude \
+    "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CODE_VERSION}/${PLATFORM}/claude" && \
+  echo "${EXPECTED_CHECKSUM}  /tmp/claude" | sha256sum -c - && \
+  mkdir -p /opt/claude && \
+  mv /tmp/claude /opt/claude/claude && \
+  chmod +x /opt/claude/claude
 
 # Base stage for VS Code extension downloads — provides the download-vsix.sh helper.
 FROM downloader AS vscode-downloader
@@ -154,7 +170,7 @@ ENV LC_ALL=C.UTF-8 LANG=C.UTF-8
 
 ARG CLAUDE_CODE_VERSION
 
-# Install basic development tools and iptables/ipset
+# Install basic development tools, iptables, and nftables (used by the castellan firewall)
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
   less \
   git \
@@ -230,14 +246,17 @@ COPY --chown=node:node --from=oh-my-zsh /opt/ohmyzsh /home/node/.oh-my-zsh
 COPY --chown=node:node --from=powerlevel10k /opt/powerlevel10k /home/node/.oh-my-zsh/custom/themes/powerlevel10k
 COPY --chown=node:node .devcontainer/node-zshrc /home/node/.zshrc
 
-# Install Claude Code from SHA-verified npm tarball
-COPY --chown=node:node --from=claude-code-npm /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz /tmp/
-RUN npm install -g /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz \
-    && rm /tmp/anthropic-ai-claude-code-${CLAUDE_CODE_VERSION}.tgz
+# Install Claude Code from the SHA-verified native binary. It is a single self-contained
+# executable, so we drop it straight onto PATH (root-owned, non-writable by node) rather
+# than running `claude install`, which would set up a user-writable auto-updating launcher.
+COPY --from=claude-code /opt/claude/claude /usr/local/bin/claude
 
-# Install the castellan firewall binary (built from source in the castellan-builder stage).
-# To switch to a downloaded release binary once the repo is public, replace the COPY below
-# with: COPY --from=castellan-download /opt/castellan/castellan /usr/local/bin/castellan
+# Install the castellan firewall binary (built from source in the castellan-builder stage),
+# plus its scripts and allow-list from .devcontainer.
+#
+# Security: the sudoers grant below gives effective root to anyone who can write
+# init-firewall.sh, so it (and the supervisor and the full /usr/local/share/castellan
+# chain) must stay root-owned and non-writable. The root COPYs already ensure this.
 USER root
 COPY --from=castellan-builder /build/target/release/castellan /usr/local/bin/castellan
 COPY .devcontainer/init-firewall.sh .devcontainer/castellan-supervisor.sh /usr/local/bin/

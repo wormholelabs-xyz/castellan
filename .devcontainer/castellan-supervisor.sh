@@ -17,6 +17,7 @@ echo "[$(date)] supervisor starting (port=${PORT})" >>"$LOG"
 while true; do
   echo "[$(date)] launching castellan daemon" >>"$LOG"
   "$BINARY" daemon --listen "127.0.0.1:${PORT}" >>"$LOG" 2>&1
-  echo "[$(date)] daemon exited (rc=$?); restarting in 1s" >>"$LOG"
+  rc=$?
+  echo "[$(date)] daemon exited (rc=${rc}); restarting in 1s" >>"$LOG"
   sleep 1
 done
