@@ -10,6 +10,9 @@
 #   JsonList(https://example.com/ips, [arr[].field])        fetch JSON; keys traverse array-of-objects
 #
 # Blank lines and everything after `#` are ignored.
+#
+# The allow-list is baked into the image at build time — edits here require a devcontainer
+# rebuild to take effect. Validate changes with: castellan check
 
 # GitHub — git/gh/clone over HTTPS. The published IP ranges are seeded into the static
 # allow-sets via JsonList below; the names must also be listed so the resolver answers them.
@@ -26,6 +29,7 @@ api.anthropic.com
 statsig.anthropic.com
 statsig.com
 platform.claude.com
+downloads.claude.ai
 
 # Repo Specific
 
