@@ -64,7 +64,7 @@ Blank lines and everything after `#` are ignored.
 In the devcontainer it is fully automatic: the `castellan` binary is built from source during
 `docker build` and baked into the image. The firewall starts at container create and is
 re-established on every restart (`postCreateCommand` / `postStartCommand` both run
-`sudo /usr/local/bin/init-firewall.sh`).
+`/usr/local/bin/init-firewall.sh`, which re-executes itself via `sudo` when not run as root).
 
 To apply code or allow-list changes, verify the build compiles first, then rebuild the devcontainer:
 
@@ -170,10 +170,14 @@ Add the required capabilities and sysctl, and wire up the two lifecycle hooks:
     "--cap-add=NET_RAW",
     "--sysctl=net.ipv4.conf.all.route_localnet=1"
   ],
-  "postCreateCommand": "sudo /usr/local/bin/init-firewall.sh",
-  "postStartCommand":  "sudo /usr/local/bin/init-firewall.sh"
+  "postCreateCommand": "/usr/local/bin/init-firewall.sh",
+  "postStartCommand":  "/usr/local/bin/init-firewall.sh"
 }
 ```
+
+The hooks run as the container user. `init-firewall.sh` re-executes itself via `sudo` when
+not root, so the sudoers grant from step 2 must cover that exact path
+(`/usr/local/bin/init-firewall.sh`); a copy run from anywhere else won't match it.
 
 `postCreateCommand` runs once when the container is first created. `postStartCommand`
 re-establishes the firewall on every container restart — the nftables ruleset lives in

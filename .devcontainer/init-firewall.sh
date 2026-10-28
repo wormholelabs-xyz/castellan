@@ -19,8 +19,13 @@ LOG=/var/log/castellan.log
 PORT=53
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "ERROR: must run as root (use sudo)" >&2
-  exit 1
+  # Self-escalate instead of dying: devcontainer lifecycle hooks run as
+  # remoteUser (node), and the Dockerfile grants node NOPASSWD sudo on the
+  # installed path (/usr/local/bin/init-firewall.sh). exec replaces this
+  # process so the escalated run's exit status propagates. Invoking a copy
+  # from any other path won't match the sudoers rule, so sudo falls back to
+  # its normal password prompt (and fails for node, as intended).
+  exec sudo "$0" "$@"
 fi
 
 if [ ! -x "$BINARY" ]; then
