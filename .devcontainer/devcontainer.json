@@ -5,9 +5,9 @@
     "context": "..",
     "args": {
       "TZ": "${localEnv:TZ:America/Los_Angeles}",
-      "CLAUDE_CODE_VERSION": "2.1.198",
-      "CLAUDE_CODE_CHECKSUM_AMD64": "7066af42a5fe93038c13af5072d4c034dc3928092cb121fdd892c76b94b6b84d",
-      "CLAUDE_CODE_CHECKSUM_ARM64": "99b50a6f2b1f3ef07bcaf1e58a2f9883c470c84e428afa321972b1aa20372e9a",
+      "CLAUDE_CODE_VERSION": "2.1.299",
+      "CLAUDE_CODE_CHECKSUM_AMD64": "2d894a4b1bfaaa9aab72aeff7803e3c73bc2510f279a171f6b8f59f72d17d077",
+      "CLAUDE_CODE_CHECKSUM_ARM64": "4cd5ab006b49dc12a247fed4dbc42a925ad1aea1e711d9aa24587d285ee87c2f",
       "GIT_DELTA_VERSION": "0.18.2",
       "GIT_DELTA_CHECKSUM_AMD64": "1658c7b61825d411b50734f34016101309e4b6e7f5799944cf8e4ac542cebd7f",
       "GIT_DELTA_CHECKSUM_ARM64": "937781aa7788e1510858743fff6c9a8b4a69fe0a22a7c8a69493e633227939a9",
@@ -17,21 +17,25 @@
       "RUSTUP_CHECKSUM_ARM64": "9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792",
       "OHMYZSH_COMMIT": "c954bbb168fc645592c50017de0d0e138db8df5f",
       "POWERLEVEL10K_COMMIT": "35833ea15f14b71dbcebc7e54c104d8d56ca5268",
-      "CLAUDE_CODE_EXT_VERSION": "2.1.198",
-      "CLAUDE_CODE_EXT_SHA256": "amd64=d22480d9c934b4974e8a20e5870a7b5daa980c5100319c88f6600b22f603e99c,arm64=df974c380afda5bed36f9824883a762b4c5da1d19db8e11c27d20549e9c3d37b",
-      "RUST_ANALYZER_EXT_VERSION": "0.3.2929",
-      "RUST_ANALYZER_EXT_SHA256": "amd64=1a1560f5c225bbf93c29c4f3282d0aa4296e2cd7ac5a4837ed915e8d2bcd69d0,arm64=c2b0cc09655d75f03de5161b10abce252cd98421693f0f669a737df80b1a3312",
+      "CLAUDE_CODE_EXT_VERSION": "2.1.299",
+      "CLAUDE_CODE_EXT_SHA256": "amd64=c4776f521668113527622a689e6f03ce2a677791eef39787996f7a9316c343d4,arm64=a0c4963d8d8d1f6edfca0efcd10be19d69feb8f3f4bdfaea690ae0959077eed2",
+      "RUST_ANALYZER_EXT_VERSION": "0.3.3081",
+      "RUST_ANALYZER_EXT_SHA256": "amd64=fd547d4a2df8b449537b1a3896a18c11a353f0ec449ac53471551ca069723bc2,arm64=8a7bab5cbf58437c2c2ae4c4856f4647072edf15c2dd89a49345b37c92cbe91f",
       "EVEN_BETTER_TOML_EXT_VERSION": "0.21.2",
       "EVEN_BETTER_TOML_EXT_SHA256": "21b8d66af4285eee31e21a4492f921ab36dffcd859a67f1115d2930274650808",
-      "CODELLDB_EXT_VERSION": "1.12.2",
-      "CODELLDB_EXT_SHA256": "70e382942d2e13e626d749364f6a7f9a74dc82abcb5700c7faaa3f5bbba5ddcb",
-      "DEPENDI_EXT_VERSION": "0.7.22",
-      "DEPENDI_EXT_SHA256": "5d8d1f6d61c66771acef045976dab4d39976fd472fb3f1267a62e33204666bb2",
-      "GITLENS_EXT_VERSION": "18.0.0",
-      "GITLENS_EXT_SHA256": "8438cae737f2a4676130086c27f15bb43ac76c551f2fbd2f4bbc65a44023ca59"
+      "CODELLDB_EXT_VERSION": "1.12.3",
+      "CODELLDB_EXT_SHA256": "460ac959094344ebb29b3d01bad94f6093b374d6fff44896ca456ac5b2047cd1",
+      "DEPENDI_EXT_VERSION": "1.20.0",
+      "DEPENDI_EXT_SHA256": "5d507ac2c8ef42f60dcfc7f29a650864a426a6bc2a0dff5a42c9238c57b6a809",
+      "GITLENS_EXT_VERSION": "19.3.0",
+      "GITLENS_EXT_SHA256": "8ee8f6a5fa49435f27059a6c65a4b05e5228ba490f1f704d4cf6e257413f6fcb"
     }
   },
-  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--sysctl=net.ipv4.conf.all.route_localnet=1"],
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW",
+    "--sysctl=net.ipv4.conf.all.route_localnet=1"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [],
@@ -72,6 +76,6 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "sudo /usr/local/bin/init-firewall.sh",
-  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh"
+  "postCreateCommand": "/usr/local/bin/init-firewall.sh",
+  "postStartCommand": "/usr/local/bin/init-firewall.sh"
 }
