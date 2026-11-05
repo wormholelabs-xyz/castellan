@@ -18,8 +18,8 @@ jobs:
           persist-credentials: false
 
       - run: |
-          rustup toolchain install 1.96.0 --component clippy,rustfmt --no-self-update
-          rustup default 1.96.0
+          rustup toolchain install 1.99.1 --component clippy,rustfmt --no-self-update
+          rustup default 1.99.1
 
       - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
