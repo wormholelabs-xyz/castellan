@@ -29,8 +29,8 @@ jobs:
           persist-credentials: false
 
       - run: |
-          rustup toolchain install 1.96.0 --target ${{ matrix.target }} --no-self-update
-          rustup default 1.96.0
+          rustup toolchain install 1.99.1 --target ${{ matrix.target }} --no-self-update
+          rustup default 1.99.1
 
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross --rev 29d00c7803f221f1b3f35e561b03792368fb8339
