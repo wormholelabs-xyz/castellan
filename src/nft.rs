@@ -26,7 +26,13 @@ pub struct RulesetParams {
     /// Upstream DNS server addresses the daemon forwards to (their `:53` is allowed out).
     pub upstreams: Vec<IpAddr>,
     /// Host networks to allow unconditionally (e.g. the Docker host /24), as CIDR strings.
+    /// Empty unless `--allow-host-network` was given.
     pub host_networks: Vec<String>,
+    /// Allow outbound TCP port 22 to any address (`--allow-ssh`).
+    pub allow_ssh: bool,
+    /// The uid the daemon runs as. Only sockets of this uid may reach the upstream
+    /// resolver(s) directly; everything else has to go through the daemon.
+    pub daemon_uid: u32,
     /// Static IPv4 CIDRs to seed (e.g. GitHub meta ranges).
     pub static_v4: Vec<Ipv4Net>,
     /// Static IPv6 CIDRs to seed.
@@ -223,24 +229,43 @@ fn build_ruleset(p: &RulesetParams) -> String {
     s.push_str("  }\n");
 
     // Output chain: default drop; this is the egress enforcement point.
+    let uid = p.daemon_uid;
     s.push_str("  chain output {\n");
     s.push_str("    type filter hook output priority 0; policy drop;\n");
     s.push_str("    ct state established,related accept\n");
-    s.push_str("    oif \"lo\" accept\n");
-    // Allow the daemon to reach the real upstream resolver(s).
+    // A loopback upstream (Docker's embedded resolver, 127.0.0.11) answers any name and any
+    // record type, so reaching it directly is a DNS tunnel around the allow-list. Only the
+    // daemon may talk to it. Matched on the address alone: Docker DNATs :53 to a random
+    // port, which a client could dial directly. Must precede `oif lo accept`.
     for up in &p.upstreams {
-        if up.is_loopback() {
-            continue; // loopback (e.g. Docker 127.0.0.11) is already covered by `oif lo`
+        if !up.is_loopback() {
+            continue;
         }
         match up {
-            IpAddr::V4(a) => {
-                s.push_str(&format!("    ip daddr {a} udp dport 53 accept\n"));
-                s.push_str(&format!("    ip daddr {a} tcp dport 53 accept\n"));
-            }
-            IpAddr::V6(a) => {
-                s.push_str(&format!("    ip6 daddr {a} udp dport 53 accept\n"));
-                s.push_str(&format!("    ip6 daddr {a} tcp dport 53 accept\n"));
-            }
+            IpAddr::V4(a) => s.push_str(&format!("    ip daddr {a} meta skuid != {uid} drop\n")),
+            IpAddr::V6(a) => s.push_str(&format!("    ip6 daddr {a} meta skuid != {uid} drop\n")),
+        }
+    }
+    s.push_str("    oif \"lo\" accept\n");
+    // DNS that `nat_output` redirected to the resolver. The redirect reroutes the packet to
+    // loopback, but `oif` still reports the interface chosen before NAT, so the rule above
+    // does not match it.
+    s.push_str(&format!(
+        "    ip daddr 127.0.0.1 meta l4proto {{ tcp, udp }} th dport {} accept\n",
+        p.resolver_port
+    ));
+    // Allow the daemon, and only the daemon, to reach the real upstream resolver(s).
+    for up in &p.upstreams {
+        if up.is_loopback() {
+            continue; // covered by `oif lo`, behind the guard above
+        }
+        match up {
+            IpAddr::V4(a) => s.push_str(&format!(
+                "    meta skuid {uid} ip daddr {a} meta l4proto {{ tcp, udp }} th dport 53 accept\n"
+            )),
+            IpAddr::V6(a) => s.push_str(&format!(
+                "    meta skuid {uid} ip6 daddr {a} meta l4proto {{ tcp, udp }} th dport 53 accept\n"
+            )),
         }
     }
     for net in &p.host_networks {
@@ -250,7 +275,9 @@ fn build_ruleset(p: &RulesetParams) -> String {
             s.push_str(&format!("    ip daddr {net} accept\n"));
         }
     }
-    s.push_str("    tcp dport 22 accept\n"); // SSH, parity with the legacy script
+    if p.allow_ssh {
+        s.push_str("    tcp dport 22 accept\n");
+    }
     s.push_str(&format!("    ip daddr @{SET_STATIC_V4} accept\n"));
     s.push_str(&format!("    ip6 daddr @{SET_STATIC_V6} accept\n"));
     s.push_str(&format!("    ip daddr @{SET_ALLOWED_V4} accept\n"));
@@ -259,12 +286,20 @@ fn build_ruleset(p: &RulesetParams) -> String {
 
     // NAT chain: transparently redirect all egress DNS to the local resolver so even
     // processes with a hardcoded resolver get their queries seen (and thus their IPs
-    // authorized). The daemon itself (uid 0) is exempted so its upstream queries escape.
+    // authorized). The daemon's own uid is exempted so its upstream queries escape, and so is
+    // root: Docker's embedded resolver (127.0.0.11) forwards from sockets of its own, owned by
+    // the Docker daemon, from inside this namespace. Redirected, those would loop back to us.
+    // The exemption is only from the redirect: root gets no other access (the loopback guard
+    // above refuses it the embedded resolver, and the upstream accept rules are the daemon's).
     // Installed in the same atomic transaction as the default-drop output chain: the daemon
     // binds its socket before applying this ruleset, so the redirect never hits a dead port.
     s.push_str("  chain nat_output {\n");
     s.push_str("    type nat hook output priority -100; policy accept;\n");
-    s.push_str("    meta skuid 0 return\n"); // daemon runs as root → forwards directly
+    if uid == 0 {
+        s.push_str("    meta skuid 0 return\n");
+    } else {
+        s.push_str(&format!("    meta skuid {{ 0, {uid} }} return\n"));
+    }
     s.push_str("    ip daddr 127.0.0.0/8 return\n");
     s.push_str("    ip6 daddr ::1 return\n");
     s.push_str(&format!(
@@ -275,4 +310,63 @@ fn build_ruleset(p: &RulesetParams) -> String {
 
     s.push_str("}\n");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params(upstream: &str) -> RulesetParams {
+        RulesetParams {
+            upstreams: vec![upstream.parse().unwrap()],
+            host_networks: vec![],
+            allow_ssh: false,
+            daemon_uid: 0,
+            static_v4: vec![],
+            static_v6: vec![],
+            resolver_port: 53,
+        }
+    }
+
+    #[test]
+    fn loopback_upstream_is_guarded_before_the_loopback_accept() {
+        let r = build_ruleset(&params("127.0.0.11"));
+        let guard = r.find("ip daddr 127.0.0.11 meta skuid != 0 drop").unwrap();
+        assert!(guard < r.find("oif \"lo\" accept").unwrap());
+    }
+
+    #[test]
+    fn only_the_daemon_reaches_a_routed_upstream() {
+        let r = build_ruleset(&params("10.0.0.2"));
+        assert!(r.contains(
+            "meta skuid 0 ip daddr 10.0.0.2 meta l4proto { tcp, udp } th dport 53 accept"
+        ));
+        assert!(!r.contains("\n    ip daddr 10.0.0.2"));
+    }
+
+    #[test]
+    fn an_unprivileged_daemon_and_root_skip_the_redirect() {
+        let mut p = params("127.0.0.11");
+        p.daemon_uid = 65532;
+        let r = build_ruleset(&p);
+        assert!(r.contains("meta skuid { 0, 65532 } return"));
+        assert!(r.contains("ip daddr 127.0.0.11 meta skuid != 65532 drop"));
+        // Root is exempt from the redirect only: it is not the one allowed to the upstream.
+        assert!(!r.contains("meta skuid 0 ip daddr"));
+        assert!(build_ruleset(&params("127.0.0.11")).contains("meta skuid 0 return"));
+    }
+
+    #[test]
+    fn host_network_and_ssh_are_off_unless_asked_for() {
+        let mut p = params("127.0.0.11");
+        let r = build_ruleset(&p);
+        assert!(!r.contains("dport 22"));
+        assert!(!r.contains("saddr"));
+        p.allow_ssh = true;
+        p.host_networks = vec!["172.18.0.0/24".into()];
+        let r = build_ruleset(&p);
+        assert!(r.contains("tcp dport 22 accept"));
+        assert!(r.contains("ip saddr 172.18.0.0/24 accept"));
+        assert!(r.contains("ip daddr 172.18.0.0/24 accept"));
+    }
 }

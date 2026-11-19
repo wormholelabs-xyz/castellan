@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Sets CLAUDE_CODE_VERSION (and its per-arch checksums) in
-# .devcontainer/devcontainer.json to match CLAUDE_CODE_EXT_VERSION, so the
+# .devcontainer/docker-compose.yml to match CLAUDE_CODE_EXT_VERSION, so the
 # standalone CLI and the VS Code extension stay on the same release.
 #
 # Run fetch-vscode-extension-shas.sh first if you also want to bump the extension.
@@ -13,14 +13,12 @@ set -euo pipefail
 # Requires: curl, jq
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEVCONTAINER_JSON="${SCRIPT_DIR}/devcontainer.json"
+# shellcheck source=lib-pins.sh
+. "${SCRIPT_DIR}/lib-pins.sh"
 
-_tmp=""
-trap '[ -n "${_tmp}" ] && rm -f "${_tmp}"' EXIT
-
-version="${1:-$(jq -r '.build.args.CLAUDE_CODE_EXT_VERSION // empty' "${DEVCONTAINER_JSON}")}"
+version="${1:-$(get_arg CLAUDE_CODE_EXT_VERSION)}"
 if [ -z "${version}" ]; then
-  echo "ERROR: CLAUDE_CODE_EXT_VERSION not found in ${DEVCONTAINER_JSON}" >&2
+  echo "ERROR: CLAUDE_CODE_EXT_VERSION not found in ${COMPOSE_FILE}" >&2
   exit 1
 fi
 
@@ -35,13 +33,8 @@ if [ -z "${amd64}" ] || [ -z "${arm64}" ]; then
   exit 1
 fi
 
-_tmp=$(mktemp "${DEVCONTAINER_JSON}.XXXXXX")
-jq --arg ver "${version}" --arg amd64 "${amd64}" --arg arm64 "${arm64}" \
-   '.build.args.CLAUDE_CODE_VERSION = $ver
-    | .build.args.CLAUDE_CODE_CHECKSUM_AMD64 = $amd64
-    | .build.args.CLAUDE_CODE_CHECKSUM_ARM64 = $arm64' \
-   "${DEVCONTAINER_JSON}" > "${_tmp}"
-mv "${_tmp}" "${DEVCONTAINER_JSON}"
-_tmp=""
+set_arg CLAUDE_CODE_VERSION "${version}"
+set_arg CLAUDE_CODE_CHECKSUM_AMD64 "${amd64}"
+set_arg CLAUDE_CODE_CHECKSUM_ARM64 "${arm64}"
 
 echo "Done — CLAUDE_CODE_VERSION=${version}" >&2

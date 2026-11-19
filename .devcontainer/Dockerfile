@@ -141,23 +141,52 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src/
 RUN cargo build --release
 
-# # Stage: download castellan binary from GitHub releases.
-# # Uncomment and swap the COPY below once the repo is public and releases are published.
-# FROM downloader AS castellan-download
-# ARG CASTELLAN_VERSION=0.1.0
-# ARG CASTELLAN_CHECKSUM_AMD64=<sha256 of castellan-linux-x86_64.tar.gz>
-# ARG CASTELLAN_CHECKSUM_ARM64=<sha256 of castellan-linux-aarch64.tar.gz>
-# RUN ARCH=$(dpkg --print-architecture) && \
-#   if [ "${ARCH}" = "amd64" ]; then \
-#     TARBALL="castellan-linux-x86_64.tar.gz"; CHECKSUM="${CASTELLAN_CHECKSUM_AMD64}"; \
-#   else \
-#     TARBALL="castellan-linux-aarch64.tar.gz"; CHECKSUM="${CASTELLAN_CHECKSUM_ARM64}"; \
-#   fi && \
-#   curl -fsSLo /tmp/castellan.tar.gz \
-#     "https://github.com/wormholelabs-xyz/castellan/releases/download/v${CASTELLAN_VERSION}/${TARBALL}" && \
-#   echo "${CHECKSUM}  /tmp/castellan.tar.gz" | sha256sum -c - && \
-#   tar -xzf /tmp/castellan.tar.gz -C /tmp castellan && \
-#   install -m 0755 /tmp/castellan /opt/castellan/castellan
+# Stage: the egress firewall's own image (the `firewall` and `resolv-init` services in
+# docker-compose.yml). Not the last stage: the dev image below is, which is what compose builds
+# without a target.
+FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d AS firewall
+# nftables: castellan runs `nft`. iproute2: `ip route`, for --allow-host-network. curl and
+# ca-certificates: `castellan verify`. libcap2-bin: `setcap`, below, and removed again.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  nftables \
+  iproute2 \
+  curl \
+  ca-certificates \
+  libcap2-bin \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=castellan-builder --chown=root:root /build/target/release/castellan /usr/local/bin/castellan
+# The user the daemon runs as. A fixed uid, far from the dev container's `node` (1000): the
+# firewall's rules name the daemon by uid, and both containers share one network namespace.
+RUN groupadd --system --gid 65532 castellan && \
+  useradd --system --uid 65532 --gid castellan --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin castellan
+# The allow-list is baked in at the path castellan reads by default; edits need an image
+# rebuild. Modes are set, not taken from the checkout, where they can be 0666. Everything the
+# daemon runs from is root's; only the directory it writes its ready file in is its own.
+RUN mkdir -p /usr/local/share/castellan /run/castellan
+COPY .devcontainer/allowed-domains.txt /usr/local/share/castellan/allowed-domains.txt
+COPY .devcontainer/castellan-supervisor.sh /usr/local/bin/castellan-supervisor.sh
+RUN chmod 0644 /usr/local/share/castellan/allowed-domains.txt && \
+  chmod 0755 /usr/local/bin/castellan /usr/local/bin/castellan-supervisor.sh && \
+  chown castellan:castellan /run/castellan
+# The daemon runs as `castellan`, and needs CAP_NET_ADMIN for nft and for nothing else. Docker does
+# not give a non-root user a capability it adds with `cap_add`, so the daemon and nft get it from
+# the files. Set after the copies above, which would not keep it. The build fails if it is not
+# there, and the tool is removed: nothing at run time needs it.
+RUN set -eux; \
+  NFT="$(readlink -f "$(command -v nft)")"; \
+  setcap cap_net_admin=ep /usr/local/bin/castellan; \
+  setcap cap_net_admin=ep "$NFT"
+# A layer of its own, so this checks what survives being committed to the image, and so the
+# log says which of these steps failed.
+RUN set -eux; \
+  NFT="$(readlink -f "$(command -v nft)")"; \
+  caps="$(getcap /usr/local/bin/castellan "$NFT")"; \
+  echo "$caps"; \
+  [ "$(printf '%s\n' "$caps" | grep -c cap_net_admin)" = 2 ]
+RUN set -eux; apt-get purge -y libcap2-bin; rm -rf /var/lib/apt/lists/*
+USER castellan
+ENTRYPOINT ["/usr/local/bin/castellan-supervisor.sh"]
 
 # Main stage
 FROM node:24@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
@@ -170,20 +199,19 @@ ENV LC_ALL=C.UTF-8 LANG=C.UTF-8
 
 ARG CLAUDE_CODE_VERSION
 
-# Install basic development tools, iptables, and nftables (used by the castellan firewall)
+# Install basic development tools. No sudo, iptables or nftables: the egress firewall is its own
+# container (the `firewall` stage above), and nothing here holds a network capability or can
+# become root.
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
   less \
   git \
   procps \
-  sudo \
   fzf \
   zsh \
   man-db \
   unzip \
   gnupg2 \
   gh \
-  iptables \
-  nftables \
   iproute2 \
   dnsutils \
   jq \
@@ -251,20 +279,12 @@ COPY --chown=node:node .devcontainer/node-zshrc /home/node/.zshrc
 # than running `claude install`, which would set up a user-writable auto-updating launcher.
 COPY --from=claude-code /opt/claude/claude /usr/local/bin/claude
 
-# Install the castellan firewall binary (built from source in the castellan-builder stage),
-# plus its scripts and allow-list from .devcontainer.
-#
-# Security: the sudoers grant below gives effective root to anyone who can write
-# init-firewall.sh, so it (and the supervisor and the full /usr/local/share/castellan
-# chain) must stay root-owned and non-writable. The root COPYs already ensure this.
+# The egress firewall is not in this image: it is the `firewall` service (the `firewall` stage
+# above). This script runs as `postStartCommand`, as `node`, so it is baked in root-owned and not
+# run from the workspace.
 USER root
-COPY --from=castellan-builder /build/target/release/castellan /usr/local/bin/castellan
-COPY .devcontainer/init-firewall.sh .devcontainer/castellan-supervisor.sh /usr/local/bin/
-RUN mkdir -p /usr/local/share/castellan
-COPY .devcontainer/allowed-domains.txt /usr/local/share/castellan/allowed-domains.txt
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/castellan-supervisor.sh && \
-  echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
-  chmod 0440 /etc/sudoers.d/node-firewall
+COPY .devcontainer/check-firewall.sh /usr/local/bin/check-firewall.sh
+RUN chmod 0755 /usr/local/bin/check-firewall.sh
 
 # VS Code extensions (baked in for version pinning; installed at folderOpen via .vscode/tasks.json)
 RUN mkdir -p /opt/vscode-extensions

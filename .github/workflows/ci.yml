@@ -34,3 +34,17 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --all-targets
       - run: cargo test --all-targets
+
+  devcontainer:
+    name: Devcontainer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # The dev container has no capability and no sudo, and the firewall is its own unprivileged
+      # container with NET_ADMIN only. No container is built here: this reads the files.
+      - run: .devcontainer/check-sidecar.sh

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Fetches version-pinned SHA256s for all VS Code extensions and writes them
-# directly into .devcontainer/devcontainer.json. All extensions are fetched in
+# directly into .devcontainer/docker-compose.yml. All extensions are fetched in
 # parallel; results are collected into per-extension temp files and applied
 # serially after all downloads complete (no locking required).
 #
@@ -14,7 +14,8 @@ set -euo pipefail
 # Requires: curl, jq, sha256sum (Linux) or shasum (macOS)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEVCONTAINER_JSON="${SCRIPT_DIR}/devcontainer.json"
+# shellcheck source=lib-pins.sh
+. "${SCRIPT_DIR}/lib-pins.sh"
 MIN_AGE_HOURS="${MIN_AGE_HOURS:-336}"
 
 TMPDIR_WORK=$(mktemp -d)
@@ -174,7 +175,7 @@ done
 
 echo "" >&2
 if [ "${FAILED}" -gt 0 ]; then
-  echo "ERROR: ${FAILED} extension(s) failed — devcontainer.json not updated." >&2
+  echo "ERROR: ${FAILED} extension(s) failed — docker-compose.yml not updated." >&2
   exit 1
 fi
 
@@ -184,14 +185,8 @@ for result_file in "${TMPDIR_WORK}"/*.result; do
   arg_prefix="$(basename "${result_file}" .result)"
   version="$(sed -n '1p' "${result_file}")"
   sha="$(sed -n '2p' "${result_file}")"
-  _tmp=$(mktemp "${DEVCONTAINER_JSON}.XXXXXX")
-  jq --arg ver_key "${arg_prefix}_VERSION" \
-     --arg sha_key "${arg_prefix}_SHA256" \
-     --arg ver "${version}" \
-     --arg sha "${sha}" \
-     '.build.args[$ver_key] = $ver | .build.args[$sha_key] = $sha' \
-     "${DEVCONTAINER_JSON}" > "${_tmp}"
-  mv "${_tmp}" "${DEVCONTAINER_JSON}"
+  set_arg "${arg_prefix}_VERSION" "${version}"
+  set_arg "${arg_prefix}_SHA256" "${sha}"
 done
 
-echo "Done — devcontainer.json updated." >&2
+echo "Done — docker-compose.yml updated." >&2
