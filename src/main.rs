@@ -28,7 +28,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the long-lived DNS proxy daemon. Self-bootstrapping: it binds, installs the
-    /// default-drop + DNS-intercept ruleset, repoints resolv.conf, then serves.
+    /// default-drop + DNS-intercept ruleset, repoints resolv.conf (unless --no-resolv-conf),
+    /// then serves.
     Daemon(DaemonArgs),
     /// End-to-end verification of the firewall.
     Verify(VerifyArgs),
@@ -57,6 +58,18 @@ struct DaemonArgs {
     /// Maximum nft element timeout (seconds).
     #[arg(long, default_value_t = 3600)]
     ttl_ceiling: u64,
+    /// Allow all traffic to and from the default gateway's /24 (the Docker host and the
+    /// other containers on its bridge). Off by default.
+    #[arg(long)]
+    allow_host_network: bool,
+    /// Allow outbound TCP port 22 to any address. Off by default: SSH to an allow-listed
+    /// name already works, since its resolved addresses are allowed on every port.
+    #[arg(long)]
+    allow_ssh: bool,
+    /// Do not rewrite /etc/resolv.conf. For a daemon that is not root, which cannot; something
+    /// else must then point the container's resolver at `--listen` before clients start.
+    #[arg(long)]
+    no_resolv_conf: bool,
 }
 
 #[derive(Args)]
@@ -118,6 +131,9 @@ async fn main() -> Result<()> {
                 ready_path: a.ready,
                 ttl_floor_secs: a.ttl_floor,
                 ttl_ceiling_secs: a.ttl_ceiling,
+                allow_host_network: a.allow_host_network,
+                allow_ssh: a.allow_ssh,
+                no_resolv_conf: a.no_resolv_conf,
             })
             .await
         }

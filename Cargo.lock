@@ -136,6 +136,7 @@ dependencies = [
  "hickory-resolver",
  "hickory-server",
  "ipnet",
+ "libc",
  "regex",
  "reqwest",
  "serde",

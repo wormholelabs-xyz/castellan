@@ -1,4 +1,4 @@
-//! `verify`: end-to-end sanity checks run at the tail of bootstrap. Exits non-zero on
+//! `verify`: end-to-end sanity checks, run in the firewall container. Exits non-zero on
 //! any failure so a broken firewall fails loudly instead of leaving a silently-broken
 //! container.
 

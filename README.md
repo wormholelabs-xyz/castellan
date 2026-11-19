@@ -25,14 +25,18 @@ resulting IPs — has two problems Castellan fixes:
 1. **`castellan daemon`** is self-bootstrapping. On startup it binds its listener socket first,
    then atomically installs the default-drop egress and DNS-redirect nftables ruleset (so the
    redirect never points at a dead port), fetches any static seed ranges (e.g. GitHub's published
-   IP ranges), repoints `/etc/resolv.conf` at itself, and begins serving.
+   IP ranges), and begins serving. (It repoints `/etc/resolv.conf` at itself too, unless it was
+   started with `--no-resolv-conf`, which the sidecar layout does: the daemon is not root.)
 2. For each DNS query the daemon matches the name against
    [`.devcontainer/allowed-domains.txt`](.devcontainer/allowed-domains.txt).
    Allowed names are forwarded to the real upstream resolver; the resolved A/AAAA addresses
    are injected into the nftables allow-sets (with a timeout derived from the DNS TTL)
    **before** the answer is returned to the client, closing the resolve→connect race.
    Unlisted names are refused.
-3. Everything else is dropped. A supervisor restarts the daemon if it crashes — Castellan
+3. Only the daemon may talk to the upstream resolver. Docker's embedded resolver
+   (`127.0.0.11`) answers any name and record type, so every other process is kept away
+   from it, on any port.
+4. Everything else is dropped. A supervisor restarts the daemon if it crashes — Castellan
    fails **closed**: if it isn't running, no new egress is authorized (existing connections
    survive via conntrack).
 
@@ -61,73 +65,64 @@ Blank lines and everything after `#` are ignored.
 
 ## Running it
 
-In the devcontainer it is fully automatic: the `castellan` binary is built from source during
-`docker build` and baked into the image. The firewall starts at container create and is
-re-established on every restart (`postCreateCommand` / `postStartCommand` both run
-`/usr/local/bin/init-firewall.sh`, which re-executes itself via `sudo` when not run as root).
+Castellan is supported in one layout: as a **sidecar**. The firewall is a container of its own
+that owns the network namespace, the container it confines joins that namespace, and that
+container starts only once the firewall is enforcing. Nothing in the confined container holds
+`NET_ADMIN` or has `sudo`, so nothing there can flush the ruleset or stop the daemon. This
+repository's own devcontainer is the reference: [`.devcontainer/`](.devcontainer/).
 
-To apply code or allow-list changes, verify the build compiles first, then rebuild the devcontainer:
+| Service       | Runs as          | Capabilities | Does                                                            |
+|---------------|------------------|--------------|-----------------------------------------------------------------|
+| `firewall`    | `castellan`      | `NET_ADMIN`  | `castellan daemon`, under a supervisor that restarts it         |
+| `resolv-init` | root, once       | none         | points the shared `resolv.conf` at the daemon (root owns it)    |
+| `dev`         | your user        | none         | your workload, in the firewall's namespace, with `no-new-privileges` |
 
-```sh
-cargo build --release                                               # verify it compiles
-castellan check --patterns .devcontainer/allowed-domains.txt       # validate allow-list
-# then: rebuild devcontainer
+```yaml
+services:
+  firewall:
+    build: { context: ., target: firewall }   # castellan + nftables + the allow-list; see below
+    user: castellan
+    init: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.conf.all.route_localnet: "1"
+      net.ipv4.ip_unprivileged_port_start: "0"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/run/castellan/ready"]
+      interval: 2s
+      retries: 30
+
+  resolv-init:
+    build: { context: ., target: firewall }
+    user: "0:0"
+    cap_drop: [ALL]
+    network_mode: "service:firewall"
+    entrypoint: ["/bin/sh", "-c", "echo 'nameserver 127.0.0.1' > /etc/resolv.conf"]
+    restart: "no"
+    depends_on:
+      firewall: { condition: service_healthy, restart: true }
+
+  dev:
+    build: .
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: "service:firewall"
+    depends_on:
+      firewall: { condition: service_healthy, restart: true }
+      resolv-init: { condition: service_completed_successfully, restart: true }
 ```
 
-The allow-list is baked into the image at build time; edits to `.devcontainer/allowed-domains.txt` require a devcontainer rebuild to take effect.
-
-To validate allow-list changes without running the daemon:
-
-```sh
-castellan check
-castellan check --patterns .devcontainer/allowed-domains.txt api.anthropic.com evil.com
-```
-
-The CLI subcommands (`daemon`, `verify`, `check`) can also be run directly; see `castellan --help`.
-
-## Requirements
-
-- Linux with `NET_ADMIN` (the devcontainer adds `--cap-add=NET_ADMIN --cap-add=NET_RAW`).
-- The **host kernel must expose `nf_tables`** — true on modern Docker Desktop and recent
-  Linux kernels. Kernel modules cannot be loaded from inside a container, so `setup` checks
-  for nftables up front and fails loudly if it is unavailable.
-
-## Operations
-
-- Daemon logs: `/var/log/castellan.log`.
-- Inspect live state: `sudo nft list table inet castellan`.
-- Recover after a daemon crash: `sudo /usr/local/bin/init-firewall.sh` (the supervisor also restarts it automatically).
-- Recover after a bad allow-list edit: fix `.devcontainer/allowed-domains.txt`, validate with `castellan check`, then rebuild the devcontainer (the allow-list is baked into the image).
-- Apply a code or allow-list change: rebuild the devcontainer.
-
-## Using Castellan in your own devcontainer
-
-Castellan is designed to be embedded in any devcontainer that needs a default-deny egress
-policy. Pre-built binaries for `linux/amd64`, `linux/amd64-musl`, `linux/aarch64`, and `linux/aarch64-musl` are published with each
-[GitHub release](https://github.com/wormholelabs-xyz/castellan/releases).
-
-### 1. Copy the supporting scripts
-
-Copy these two files from this repository into your project's `.devcontainer/` directory:
-
-- [`.devcontainer/init-firewall.sh`](.devcontainer/init-firewall.sh) — installs the binary and (re)starts the supervised daemon
-- [`.devcontainer/castellan-supervisor.sh`](.devcontainer/castellan-supervisor.sh) — restarts the daemon if it crashes (fail-closed: no daemon → no new egress)
-
-### 2. Add a download layer to your Dockerfile
-
-Add a stage that fetches and verifies the release binary, then copy it into your main stage.
-Get the SHA256 checksums by downloading each tarball from the
-[releases page](https://github.com/wormholelabs-xyz/castellan/releases) and running
-`sha256sum` on it.
+The firewall's image downloads the release binary, checks it, and gives it its one capability:
 
 ```dockerfile
-# Stage: download and verify the castellan binary
-FROM debian:bookworm-slim AS castellan
-ARG CASTELLAN_VERSION=0.1.0
-ARG CASTELLAN_CHECKSUM_AMD64=<sha256 of castellan-linux-x86_64.tar.gz>
-ARG CASTELLAN_CHECKSUM_ARM64=<sha256 of castellan-linux-aarch64.tar.gz>
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+FROM debian:bookworm-slim AS firewall
+ARG CASTELLAN_VERSION
+ARG CASTELLAN_CHECKSUM_AMD64
+ARG CASTELLAN_CHECKSUM_ARM64
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nftables iproute2 curl ca-certificates libcap2-bin && rm -rf /var/lib/apt/lists/*
+# Get the checksums by running `sha256sum` on each tarball on the releases page.
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "${ARCH}" = "amd64" ]; then \
       TARBALL="castellan-linux-x86_64.tar.gz"; CHECKSUM="${CASTELLAN_CHECKSUM_AMD64}"; \
@@ -137,81 +132,112 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSLo /tmp/castellan.tar.gz \
       "https://github.com/wormholelabs-xyz/castellan/releases/download/v${CASTELLAN_VERSION}/${TARBALL}" && \
     echo "${CHECKSUM}  /tmp/castellan.tar.gz" | sha256sum -c - && \
-    tar -xzf /tmp/castellan.tar.gz -C /tmp castellan && \
-    install -m 0755 /tmp/castellan /usr/local/bin/castellan
-
-# Your main stage
-FROM your-base-image
-
-# ... your existing setup ...
-
-# Install castellan — binary from the download stage, scripts from your .devcontainer
-COPY --from=castellan /usr/local/bin/castellan /usr/local/bin/castellan
-COPY init-firewall.sh castellan-supervisor.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/castellan-supervisor.sh
-
-# Allow the non-root container user to start the firewall (replace YOUR_USER accordingly)
-RUN echo "YOUR_USER ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \
-      > /etc/sudoers.d/castellan-firewall && \
-    chmod 0440 /etc/sudoers.d/castellan-firewall
-# The COPY + chmod above already sets root ownership on init-firewall.sh and
-# castellan-supervisor.sh. Do not change their owner or mode — the sudoers grant
-# gives effective root to anyone who can write those paths.
+    tar --no-same-owner -xzf /tmp/castellan.tar.gz -C /usr/local/bin castellan && \
+    rm /tmp/castellan.tar.gz
+RUN groupadd --system --gid 65532 castellan && \
+    useradd --system --uid 65532 --gid castellan --no-create-home --home-dir /nonexistent \
+      --shell /usr/sbin/nologin castellan
+RUN mkdir -p /usr/local/share/castellan /run/castellan
+COPY allowed-domains.txt /usr/local/share/castellan/allowed-domains.txt
+COPY castellan-supervisor.sh /usr/local/bin/castellan-supervisor.sh
+RUN chmod 0644 /usr/local/share/castellan/allowed-domains.txt && \
+    chmod 0755 /usr/local/bin/castellan /usr/local/bin/castellan-supervisor.sh && \
+    chown castellan:castellan /run/castellan
+# Docker does not give a non-root user a capability added with `cap_add`, so the daemon and nft
+# get CAP_NET_ADMIN from the files.
+RUN set -eux; \
+    setcap cap_net_admin=ep /usr/local/bin/castellan; \
+    setcap cap_net_admin=ep "$(readlink -f "$(command -v nft)")"; \
+    getcap /usr/local/bin/castellan "$(readlink -f "$(command -v nft)")"; \
+    apt-get purge -y libcap2-bin; rm -rf /var/lib/apt/lists/*
+USER castellan
+ENTRYPOINT ["/usr/local/bin/castellan-supervisor.sh"]
 ```
 
-### 3. Configure devcontainer.json
-
-Add the required capabilities and sysctl, and wire up the two lifecycle hooks:
-
-```json
-{
-  "runArgs": [
-    "--cap-add=NET_ADMIN",
-    "--cap-add=NET_RAW",
-    "--sysctl=net.ipv4.conf.all.route_localnet=1"
-  ],
-  "postCreateCommand": "/usr/local/bin/init-firewall.sh",
-  "postStartCommand":  "/usr/local/bin/init-firewall.sh"
-}
-```
-
-The hooks run as the container user. `init-firewall.sh` re-executes itself via `sudo` when
-not root, so the sudoers grant from step 2 must cover that exact path
-(`/usr/local/bin/init-firewall.sh`); a copy run from anywhere else won't match it.
-
-`postCreateCommand` runs once when the container is first created. `postStartCommand`
-re-establishes the firewall on every container restart — the nftables ruleset lives in
-the network namespace and is lost when the container stops.
-
-### 4. Write your allow-list
-
-Create `.devcontainer/allowed-domains.txt` in your project. Pass it to the daemon via
-`--patterns` (or bake it into the image at `PATTERNS_FALLBACK`).
-
-A minimal starting point that covers GitHub access:
+Copy [`castellan-supervisor.sh`](.devcontainer/castellan-supervisor.sh) and write your
+allow-list ([The allow-list](#the-allow-list)); a minimal one that covers GitHub:
 
 ```
-# GitHub — git/gh/clone over HTTPS.
-# JsonList seeds GitHub's published IP ranges into the static nftables allow-set.
 JsonList(https://api.github.com/meta, [web, api, git])
 .github.com
 .githubusercontent.com
-.githubassets.com
-
-# Add your project-specific domains below:
 ```
 
-See [The allow-list](#the-allow-list) section above for the full syntax reference.
+Things that matter, each of which [`check-sidecar.sh`](.devcontainer/check-sidecar.sh) checks
+for this repository's layout:
+
+- **`dev` starts only once the firewall is healthy** (it writes `/run/castellan/ready` after
+  binding, installing the ruleset and starting to serve), and after `resolv-init` has run: there
+  is no moment at which a process in `dev` has open egress or the wrong resolver.
+- **The firewall is not root and has one capability.** `cap_drop: [ALL]` and `NET_ADMIN`, given to
+  the binaries as file capabilities. So no `no-new-privileges` on it, which would ignore them.
+- **Share nothing else with `dev`**: no volumes, `pid` or `ipc`. The binary, the supervisor and the
+  allow-list are the firewall image's, and `dev` cannot see them.
+- **No restart policy on the firewall.** A restarted container gets a new network namespace and
+  `dev` would be left in the old one. The supervisor restarts a daemon that crashes without
+  restarting the container.
+- **Nothing in `dev` may be able to become root.** `cap_drop: [ALL]`, `no-new-privileges`, no
+  `sudo`. uid 0 is exempt from the DNS redirect (see [Security notes](#security-notes)).
+
+## Requirements
+
+- Linux with the **`nf_tables`** kernel subsystem, which the host provides: modules cannot be loaded
+  from inside a container, so the daemon checks for it up front and fails loudly if it is missing.
+- `NET_ADMIN` in the firewall container, for `nft`. No other capability, and no `NET_RAW`:
+  Castellan opens no raw socket.
+- `net.ipv4.conf.all.route_localnet=1` on the namespace (the DNS redirect goes to loopback), and
+  `net.ipv4.ip_unprivileged_port_start=0` (the daemon binds `127.0.0.1:53` as an ordinary user).
+  Docker only lets the namespace's owner, the firewall, set them.
+- File capabilities on `castellan` and `nft`, so an image format and a filesystem that keep
+  extended attributes. On a first run, check that the daemon holds the capability and no more:
+  `CapEff` in its `/proc/<pid>/status` should be `0000000000001000`.
+
+## Operations
+
+- Daemon logs: `docker logs <project>-firewall-1`.
+- Inspect live state: `docker exec <project>-firewall-1 nft list table inet castellan`.
+- Check it end to end: `docker exec <project>-firewall-1 castellan verify`.
+- A daemon crash is handled by the supervisor, which restarts it within a second; until then no new
+  name resolves, and existing connections survive.
+- Recover after a bad allow-list edit: fix it, validate it from the dev container with
+  `cargo run -- check --patterns .devcontainer/allowed-domains.txt [name ...]`, then rebuild.
+- Apply a code or allow-list change: rebuild the devcontainer (the allow-list is baked into the
+  firewall image).
+- If DNS fails on first start, `check-firewall.sh` (the `postStartCommand`) says so. Docker's
+  embedded resolver forwards to the host's resolver from inside the namespace, and with
+  `--allow-host-network` off that traffic may be dropped. Add the flag in the firewall's
+  environment, `CASTELLAN_EXTRA_ARGS: --allow-host-network`, to test it.
+
+## Unconditional allowances
+
+Both are off by default; each is a daemon flag, passed through `CASTELLAN_EXTRA_ARGS`.
+
+| Flag                   | Allows                                                              |
+|------------------------|---------------------------------------------------------------------|
+| `--allow-host-network` | all traffic to and from the default gateway's /24 (the Docker host and other containers on its bridge) |
+| `--allow-ssh`          | outbound TCP port 22 to any address                                 |
+
+SSH to an allow-listed name (for example `github.com`) needs neither: its resolved addresses are
+allowed on every port. The daemon also takes `--no-resolv-conf` (the supervisor passes it, since
+`resolv-init` does that job as root), `--upstream`, `--ttl-floor` and `--ttl-ceiling`; see
+`castellan daemon --help`.
 
 ## Security notes
 
 See [SECURITY.md](SECURITY.md) for the full threat model. In brief:
 
-- Castellan assumes the in-container attacker is **non-root and lacks `CAP_NET_ADMIN`**. A process with either can flush the nftables ruleset and bypass the firewall.
-- It intercepts DNS at the system resolver; DNS-over-HTTPS/TLS, hardcoded IPs, and connections to already-authorized IPs bypass it.
-- It controls *where* traffic goes, not *what* it contains — exfiltration to allowed destinations is out of scope.
-
-The sudoers grant (`NOPASSWD: /usr/local/bin/init-firewall.sh`) gives effective root to anyone who can write that path; `init-firewall.sh` and `castellan-supervisor.sh` must be root-owned and non-writable. The full directory chain from `/usr/local/share/` down to `allowed-domains.txt` must be root-owned and non-writable too — in Unix, write access to any ancestor directory is enough to rename the `castellan/` directory aside and substitute a different allow-list.
+- Castellan assumes the confined container holds **no capabilities and cannot become root**. A
+  process with `CAP_NET_ADMIN` in the firewall's network namespace can flush the nftables ruleset
+  and bypass the firewall. The sidecar layout keeps that capability out of the confined container.
+- The daemon that parses DNS packets from the confined container is **not root**: it runs as an
+  unprivileged uid and holds `CAP_NET_ADMIN` and nothing else. It still needs that capability to add
+  resolved addresses to the allow-sets, so a compromised daemon could open egress. It cannot write
+  the binary, the supervisor or the allow-list, but what it does to the ruleset lasts until the
+  firewall container is recreated: a daemon the supervisor restarts keeps the live ruleset.
+- It intercepts DNS at the system resolver; DNS-over-HTTPS/TLS, hardcoded IPs, and connections to
+  already-authorized IPs bypass it.
+- It controls *where* traffic goes, not *what* it contains: exfiltration to allowed destinations
+  is out of scope.
 
 ## Development
 

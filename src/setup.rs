@@ -1,7 +1,6 @@
 //! Firewall bootstrap: build and atomically apply the nftables ruleset.
 //!
-//! There is no longer a two-phase `setup` / `enable-intercept` dance. The daemon binds its
-//! listener socket first, then calls [`apply_ruleset`], which installs default-drop egress
+//! The daemon binds its listener socket first, then calls [`apply_ruleset`], which installs default-drop egress
 //! **and** the DNS-redirect NAT chain in a single atomic transaction — so interception is
 //! never enabled before the resolver is listening, and default-drop is never enforced
 //! before the allow-set population path (interception) is live.
@@ -37,14 +36,31 @@ pub async fn apply_ruleset(
     upstreams: Vec<IpAddr>,
     resolver_port: u16,
     patterns_path: &std::path::Path,
+    allow_host_network: bool,
+    allow_ssh: bool,
 ) -> Result<()> {
     let nft = Nft::default();
     nft.check_available()
         .await
         .context("nftables is not usable in this container")?;
+    // Before anything is applied: a warm restart skips this function, so a ruleset installed
+    // without the sysctl would be kept with a redirect that cannot work.
+    check_route_localnet()?;
 
-    let host_networks = detect_host_networks().await?;
-    info!(?host_networks, "detected host networks");
+    // Off by default: the gateway's /24 is the Docker host and every other container on
+    // the bridge, none of which the allow-list names.
+    let host_networks = if allow_host_network {
+        detect_host_networks().await?
+    } else {
+        Vec::new()
+    };
+    info!(?host_networks, allow_ssh, "unconditional allowances");
+
+    // The uid this process runs as: the only one allowed to reach the upstream directly.
+    // (Not read from /proc/self's owner: that is root for a process that is not dumpable,
+    // which a process started through file capabilities is.)
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let daemon_uid = unsafe { libc::geteuid() };
 
     let config = Config::load(patterns_path).context("loading allow-list config")?;
 
@@ -80,6 +96,8 @@ pub async fn apply_ruleset(
     let params = RulesetParams {
         upstreams,
         host_networks,
+        allow_ssh,
+        daemon_uid,
         static_v4: Ipv4Net::aggregate(&all_v4),
         static_v6: Ipv6Net::aggregate(&all_v6),
         resolver_port,
@@ -88,7 +106,6 @@ pub async fn apply_ruleset(
         .await
         .context("applying nftables ruleset")?;
 
-    enable_route_localnet()?;
     info!("ruleset applied");
     Ok(())
 }
@@ -170,8 +187,7 @@ pub fn repoint_resolv_conf() -> Result<()> {
         .with_context(|| format!("repointing {RESOLV_CONF} at the local resolver"))
 }
 
-/// Detect host networks to allow, mirroring the legacy script: the /24 of the default
-/// gateway.
+/// Detect host networks to allow: the /24 of the default gateway.
 async fn detect_host_networks() -> Result<Vec<String>> {
     let out = Command::new("ip")
         .args(["route"])
@@ -195,15 +211,15 @@ async fn detect_host_networks() -> Result<Vec<String>> {
     Ok(nets)
 }
 
-/// Verify the sysctl required for DNAT to loopback is active (set via --sysctl at container
-/// creation; writing to /proc/sys is not possible without SYS_ADMIN).
-fn enable_route_localnet() -> Result<()> {
+/// Verify the sysctl required for DNAT to loopback is active (set by the container runtime;
+/// writing to /proc/sys is not possible without SYS_ADMIN).
+fn check_route_localnet() -> Result<()> {
     let val = std::fs::read_to_string("/proc/sys/net/ipv4/conf/all/route_localnet")
         .context("reading net.ipv4.conf.all.route_localnet")?;
     anyhow::ensure!(
         val.trim() == "1",
-        "net.ipv4.conf.all.route_localnet is not set; add \
-         --sysctl=net.ipv4.conf.all.route_localnet=1 to the container runArgs"
+        "net.ipv4.conf.all.route_localnet is not set; set it on the firewall container \
+         (compose `sysctls`, or `--sysctl` for docker run)"
     );
     Ok(())
 }

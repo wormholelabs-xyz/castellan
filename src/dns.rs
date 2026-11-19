@@ -38,6 +38,12 @@ pub struct DaemonOpts {
     pub ready_path: PathBuf,
     pub ttl_floor_secs: u64,
     pub ttl_ceiling_secs: u64,
+    /// Allow the default gateway's /24 (the Docker host and bridge) unconditionally.
+    pub allow_host_network: bool,
+    /// Allow outbound TCP port 22 to any address.
+    pub allow_ssh: bool,
+    /// Leave `/etc/resolv.conf` alone (something else points it at us).
+    pub no_resolv_conf: bool,
 }
 
 struct Handler {
@@ -220,12 +226,35 @@ fn build_resolver(upstreams: &[IpAddr]) -> Result<TokioResolver> {
 pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
     let nft = Nft::default();
 
+    // The readiness file says "this daemon finished bootstrapping". One left by a previous
+    // run would say it for a daemon that has not, so remove it before anything can fail.
+    match std::fs::remove_file(&opts.ready_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "removing stale readiness file {}",
+                    opts.ready_path.display()
+                )
+            });
+        }
+    }
+
     // 1. Upstream(s): explicit flag wins, otherwise read resolv.conf (or its backup).
     let upstreams = if opts.upstreams.is_empty() {
         crate::setup::resolve_upstreams()?
     } else {
         opts.upstreams
     };
+
+    // Clients are kept away from a loopback upstream by address, so it cannot be the
+    // address they reach us on (and forwarding to ourselves would loop anyway).
+    anyhow::ensure!(
+        !upstreams.contains(&opts.listen.ip()),
+        "upstream {} is the address the daemon listens on",
+        opts.listen.ip()
+    );
 
     let patterns = PatternSet::load(&opts.patterns_path)?;
     info!(
@@ -269,13 +298,23 @@ pub async fn run_daemon(opts: DaemonOpts) -> Result<()> {
         info!("interception already active — warm restart, keeping the live ruleset");
     } else {
         info!("cold start — applying default-drop + DNS-intercept ruleset");
-        crate::setup::apply_ruleset(upstreams, opts.listen.port(), &opts.patterns_path)
-            .await
-            .context("applying firewall ruleset")?;
+        crate::setup::apply_ruleset(
+            upstreams,
+            opts.listen.port(),
+            &opts.patterns_path,
+            opts.allow_host_network,
+            opts.allow_ssh,
+        )
+        .await
+        .context("applying firewall ruleset")?;
     }
 
     // 4. Take over DNS resolution (belt-and-suspenders alongside the NAT redirect).
-    crate::setup::repoint_resolv_conf()?;
+    if opts.no_resolv_conf {
+        info!("leaving /etc/resolv.conf as it is (--no-resolv-conf)");
+    } else {
+        crate::setup::repoint_resolv_conf()?;
+    }
 
     // 5. Signal readiness, then serve.
     if let Some(parent) = opts.ready_path.parent() {
